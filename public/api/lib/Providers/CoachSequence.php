@@ -1,13 +1,22 @@
 <?php
 /**
- * Wagenreihung und Baureihe über bahn.expert.
+ * Wagenreihung und Baureihe - direkt bei bahn.de, ersatzweise bahn.expert.
  *
- * WARUM NICHT DIREKT BEI DER DB:
- * Der DB-Endpunkt reisebegleitung/wagenreihung/vehicle-sequence antwortet auf
- * jede von außen gebaute Anfrage mit HTTP 422 - die nötige
- * Parameterkombination ließ sich nicht ermitteln. bahn.expert spricht mit
- * denselben Daten (Quelle "DB-risTransports") und liefert sie über eine
- * erreichbare Schnittstelle.
+ * JETZT DIREKT BEI DER DB. Hier stand lange, der DB-Endpunkt
+ * reisebegleitung/wagenreihung/vehicle-sequence antworte auf jede von außen
+ * gebaute Anfrage mit HTTP 422. Die Kombination, die geht (nachgemessen
+ * 2026-09, 8 von 9 Zügen, der neunte ohne Reihung): administrationId=80,
+ * category, date, evaNumber, number und time als UTC mit Millisekunden
+ * ("2026-09-24T06:03:00.000Z") - über das Browser-TLS-Profil wie die
+ * übrige DB-Anbindung. Anlass war, dass bahn.expert seine Schnittstelle
+ * erneut verschoben hatte (/api/trpc antwortete wie vorher /rpc mit HTTP 500
+ * "Only HTML requests are supported here") und die Baureihe wochenlang fehlte.
+ *
+ * Die DB-Antwort ist dazu die reichere: der Bahnsteig mit seinen Sektoren in
+ * Metern, und jeder Wagen mit Nummer, Klasse, Sektor und Lage am Bahnsteig.
+ * Daraus entsteht der Wagenplan im Umstiegsplan - siehe sequence().
+ *
+ * bahn.expert bleibt als Quelle wählbar (config: wagenreihung.source).
  *
  * WAS ES LIEFERT:
  *   - Baureihe: "412" / "ICE 4 (BR412)"  <- genau das, was in den
@@ -32,11 +41,170 @@ final class CoachSequence
     private array $cfg;
     private Cache $cache;
 
+    /**
+     * Bauart-Kennungen der DB auf die Baureihen, die trains.js kennt.
+     *
+     * Zwei Schreibweisen, beide nachgesehen: "I4080".."I4088" (ICE 3neo) -
+     * Baureihe vorn, Wagen hinten - und "I0812", "I1412" (ICE 4) - Wagen
+     * vorn, Baureihe hinten.
+     */
+    private const SERIES_NAMES = [
+        '401'  => 'ICE 1 (BR 401)',
+        '402'  => 'ICE 2 (BR 402)',
+        '403'  => 'ICE 3 (BR 403)',
+        '406'  => 'ICE 3 (BR 406)',
+        '407'  => 'ICE 3 (BR 407)',
+        '408'  => 'ICE 3neo (BR 408)',
+        '411'  => 'ICE T (BR 411)',
+        '415'  => 'ICE T (BR 415)',
+        '412'  => 'ICE 4 (BR 412)',
+        '6110' => 'ICE L',
+        '4110' => 'IC 2 (KISS)',
+    ];
+
+    private string $source;
+
     public function __construct(Http $http, array $cfg, Cache $cache)
     {
-        $this->http  = $http;
+        $this->source = (string) ($cfg['source'] ?? 'bahnde');
+        // bahn.de blockt ohne Browser-TLS, wie überall sonst auch.
+        $this->http  = $this->source === 'bahnde' ? $http->withBrowserTls() : $http;
         $this->cfg   = $cfg;
         $this->cache = $cache;
+    }
+
+    /**
+     * Die Wagenreihung eines Zuges an einem Bahnhof, für den Umstiegsplan.
+     *
+     * @param string $timeIso geplante Abfahrt dort (mit Zone)
+     * @return ?array{platform:?string, length:float, sectors:array, vehicles:array, trains:array}
+     */
+    public function sequence(string $eva, string $number, string $category, string $timeIso): ?array
+    {
+        if ($this->source !== 'bahnde') {
+            return null;
+        }
+        $key = 'seq:' . self::key($eva, $number, $category, $timeIso);
+        $cached = $this->cache->get($key, 600);
+        if ($cached !== null) {
+            return $cached === '' ? null : $cached;
+        }
+        $url = $this->url($eva, $number, $category, $timeIso);
+        if ($url === null) {
+            return null;
+        }
+        $res = $this->http->getJson($url, $this->headers());
+        $seq = ($res['ok'] && is_array($res['json'])) ? self::mapSequence($res['json']) : null;
+        $this->cache->set($key, $seq ?? '');
+        return $seq;
+    }
+
+    /**
+     * Die Antwort von vehicle-sequence, auf das Nötige gekürzt.
+     *
+     * Positionen in Metern ab dem Anfang des Bahnsteigs (Sektor A).
+     */
+    public static function mapSequence(array $j): ?array
+    {
+        $plat = $j['platform'] ?? null;
+        $vehicles = [];
+        $trains = [];
+        foreach (($j['groups'] ?? []) as $g) {
+            $t = $g['transport'] ?? [];
+            $trains[] = [
+                'number'      => (string) ($t['number'] ?? ''),
+                'category'    => (string) ($t['category'] ?? ''),
+                'destination' => (string) ($t['destination']['name'] ?? ''),
+            ];
+            foreach (($g['vehicles'] ?? []) as $v) {
+                $pos = $v['platformPosition'] ?? [];
+                if (!isset($pos['start'], $pos['end'])) {
+                    continue;
+                }
+                $typ = $v['type'] ?? [];
+                $kat = (string) ($typ['category'] ?? '');
+                $ausstattung = array_column(array_filter(
+                    (array) ($v['amenities'] ?? []),
+                    static fn($a) => ($a['status'] ?? '') !== 'UNAVAILABLE'
+                ), 'type');
+                $vehicles[] = [
+                    'n'      => isset($v['wagonIdentificationNumber']) ? (string) $v['wagonIdentificationNumber'] : '',
+                    'first'  => !empty($typ['hasFirstClass']),
+                    'second' => !empty($typ['hasEconomyClass']),
+                    'dining' => str_contains($kat, 'DINING') || str_contains($kat, 'BISTRO'),
+                    'loco'   => str_contains($kat, 'LOCOMOTIVE') || str_contains($kat, 'POWERCAR'),
+                    'bike'   => in_array('BIKE_SPACE', $ausstattung, true),
+                    'wheelchair' => in_array('WHEELCHAIR_SPACE', $ausstattung, true),
+                    'closed' => ($v['status'] ?? 'OPEN') !== 'OPEN',
+                    'sector' => (string) ($pos['sector'] ?? ''),
+                    'start'  => (float) $pos['start'],
+                    'end'    => (float) $pos['end'],
+                    'group'  => count($trains) - 1,
+                ];
+            }
+        }
+        if ($vehicles === []) {
+            return null;
+        }
+        $sectors = [];
+        foreach ((array) ($plat['sectors'] ?? []) as $sct) {
+            if (isset($sct['name'], $sct['start'], $sct['end'])) {
+                $sectors[] = ['name' => (string) $sct['name'], 'start' => (float) $sct['start'], 'end' => (float) $sct['end']];
+            }
+        }
+        $ende = max(array_merge([(float) ($plat['end'] ?? 0)], array_column($vehicles, 'end')));
+        return [
+            'platform' => isset($j['departurePlatform']) ? (string) $j['departurePlatform'] : ($plat['name'] ?? null),
+            'length'   => $ende,
+            'sectors'  => $sectors,
+            'vehicles' => $vehicles,
+            'trains'   => $trains,
+        ];
+    }
+
+    /**
+     * Baureihe aus den Bauart-Kennungen der Wagen - die häufigste bekannte.
+     *
+     * @return ?array{series:string, seriesName:string}
+     */
+    public static function seriesFromVehicles(array $j, string $category): ?array
+    {
+        $zaehler = [];
+        foreach (($j['groups'] ?? []) as $g) {
+            foreach (($g['vehicles'] ?? []) as $v) {
+                $ct = (string) ($v['type']['constructionType'] ?? '');
+                $s = null;
+                if (preg_match('/^I\d(412|812)$/', $ct)) {
+                    $s = '412';
+                } elseif (preg_match('/^I(\d{3})\d$/', $ct, $m)) {
+                    $s = $m[1] === '411' && $category === 'IC' ? '4110' : $m[1];
+                } elseif (str_starts_with($ct, 'R89') && $category === 'ICE') {
+                    $s = '6110';
+                }
+                if ($s !== null && isset(self::SERIES_NAMES[$s])) {
+                    $zaehler[$s] = ($zaehler[$s] ?? 0) + 1;
+                }
+            }
+        }
+        if ($zaehler === []) {
+            return null;
+        }
+        arsort($zaehler);
+        $s = (string) array_key_first($zaehler);
+        return ['series' => $s, 'seriesName' => self::SERIES_NAMES[$s]];
+    }
+
+    /** @return array<string,string> */
+    private function headers(): array
+    {
+        return $this->source === 'bahnde'
+            ? [
+                'Accept'          => 'application/json',
+                'Accept-Language' => 'de-DE,de;q=0.9',
+                'Referer'         => 'https://www.bahn.de/',
+                'User-Agent'      => 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            ]
+            : ['User-Agent' => 'train-maxxing/1.0 (privates Fahrplanwerkzeug)'];
     }
 
     /**
@@ -128,12 +296,10 @@ final class CoachSequence
             }
         }
 
-        $antworten = $this->http->getJsonAll($urls, [
-            'User-Agent' => 'train-maxxing/1.0 (privates Fahrplanwerkzeug)',
-        ]);
+        $antworten = $this->http->getJsonAll($urls, $this->headers());
 
         foreach ($antworten as $key => $res) {
-            $info = $this->parse($res);
+            $info = $this->parse($res, $offen[$key]['cat'] ?? '');
             // Auch Misserfolge merken, sonst fragen wir bei jedem Aufruf erneut.
             $this->cache->set($key, $info ?? '');
             $treffer[$key] = $info;
@@ -176,6 +342,18 @@ final class CoachSequence
             return null;
         }
 
+        if ($this->source === 'bahnde') {
+            return rtrim((string) ($this->cfg['endpoint'] ?? ''), '/') . '?' . http_build_query([
+                'administrationId' => '80',
+                'category'         => $category,
+                // Der Tag des Zuglaufs in Ortszeit, die Uhrzeit in UTC.
+                'date'             => $dep->setTimezone(new DateTimeZone('Europe/Berlin'))->format('Y-m-d'),
+                'evaNumber'        => $eva,
+                'number'           => $number,
+                'time'             => $dep->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.000\Z'),
+            ]);
+        }
+
         // Der Dienst erwartet UTC-Zeitstempel im JavaScript-Format.
         $planned = $dep->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d\TH:i:s.000\Z');
         // Der Abfahrtstag des Zuglaufs; Mitternacht des Reisetags genügt.
@@ -213,10 +391,36 @@ final class CoachSequence
      * @param array{ok:bool,status:int,body:string,error:?string,json:?array} $res
      * @return array{series:string,seriesName:string,coaches:?array}|null
      */
-    private function parse(array $res): ?array
+    private function parse(array $res, string $category = ''): ?array
     {
         if (!$res['ok'] || $res['json'] === null) {
             return null;
+        }
+
+        if ($this->source === 'bahnde') {
+            $br = self::seriesFromVehicles($res['json'], $category);
+            if ($br === null) {
+                return null;
+            }
+            $first = 0;
+            $second = 0;
+            $total = 0;
+            foreach (($res['json']['groups'] ?? []) as $g) {
+                foreach (($g['vehicles'] ?? []) as $v) {
+                    $kat = (string) ($v['type']['category'] ?? '');
+                    if (str_contains($kat, 'LOCOMOTIVE') || str_contains($kat, 'POWERCAR')) {
+                        continue;
+                    }
+                    $total++;
+                    if (!empty($v['type']['hasFirstClass'])) {
+                        $first++;
+                    }
+                    if (!empty($v['type']['hasEconomyClass'])) {
+                        $second++;
+                    }
+                }
+            }
+            return $br + ['coaches' => ['total' => $total, 'first' => $first, 'second' => $second, 'occupancy' => null]];
         }
 
         $data = $res['json']['result']['data'] ?? null;

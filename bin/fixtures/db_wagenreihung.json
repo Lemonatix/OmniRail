@@ -1,0 +1,343 @@
+{
+ "departureID": "8000261_D_1",
+ "departurePlatform": "12",
+ "departurePlatformSchedule": "12",
+ "groups": [
+  {
+   "name": "ICE1160",
+   "transport": {
+    "category": "ICE",
+    "destination": {
+     "name": "Wien Hbf"
+    },
+    "journeyID": "20260924-33974afa-22b5-3b8f-b3ed-638fd29ddd40",
+    "line": "",
+    "number": 1211,
+    "type": "HIGH_SPEED_TRAIN"
+   },
+   "vehicles": [
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 361.8,
+      "end": 388.8,
+      "sector": "G"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "CONTROLCAR_ECONOMY_CLASS",
+      "constructionType": "I4115",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 21
+    },
+    {
+     "amenities": [
+      {
+       "amount": 1,
+       "status": "AVAILABLE",
+       "type": "WHEELCHAIR_SPACE"
+      }
+     ],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 335.9,
+      "end": 361.8,
+      "sector": "G"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_ECONOMY_CLASS",
+      "constructionType": "I4116",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 22
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 310,
+      "end": 335.9,
+      "sector": "F"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_ECONOMY_CLASS",
+      "constructionType": "I4117",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 23
+    },
+    {
+     "amenities": [
+      {
+       "amount": 3,
+       "status": "AVAILABLE",
+       "type": "BIKE_SPACE"
+      }
+     ],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 284.1,
+      "end": 310,
+      "sector": "F"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_ECONOMY_CLASS",
+      "constructionType": "I4118",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 24
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 258.2,
+      "end": 284.1,
+      "sector": "E"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "DININGCAR",
+      "constructionType": "I4112",
+      "hasEconomyClass": false,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 26
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 232.3,
+      "end": 258.2,
+      "sector": "E"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_FIRST_ECONOMY_CLASS",
+      "constructionType": "I4111",
+      "hasEconomyClass": true,
+      "hasFirstClass": true
+     },
+     "wagonIdentificationNumber": 27
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 204.4,
+      "end": 232.3,
+      "sector": "D"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "CONTROLCAR_FIRST_CLASS",
+      "constructionType": "I4110",
+      "hasEconomyClass": false,
+      "hasFirstClass": true
+     },
+     "wagonIdentificationNumber": 28
+    }
+   ]
+  },
+  {
+   "name": "ICE1131",
+   "transport": {
+    "category": "ICE",
+    "destination": {
+     "name": "Wien Hbf"
+    },
+    "journeyID": "20260924-33974afa-22b5-3b8f-b3ed-638fd29ddd40",
+    "line": "",
+    "number": 1211,
+    "type": "HIGH_SPEED_TRAIN"
+   },
+   "vehicles": [
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 177.4,
+      "end": 204.4,
+      "sector": "D"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "CONTROLCAR_ECONOMY_CLASS",
+      "constructionType": "I4115",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 31
+    },
+    {
+     "amenities": [
+      {
+       "amount": 1,
+       "status": "AVAILABLE",
+       "type": "WHEELCHAIR_SPACE"
+      }
+     ],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 151.5,
+      "end": 177.4,
+      "sector": "C"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_ECONOMY_CLASS",
+      "constructionType": "I4116",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 32
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 125.6,
+      "end": 151.5,
+      "sector": "C"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_ECONOMY_CLASS",
+      "constructionType": "I4117",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 33
+    },
+    {
+     "amenities": [
+      {
+       "amount": 3,
+       "status": "AVAILABLE",
+       "type": "BIKE_SPACE"
+      }
+     ],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 99.7,
+      "end": 125.6,
+      "sector": "B"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_ECONOMY_CLASS",
+      "constructionType": "I4118",
+      "hasEconomyClass": true,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 34
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 73.8,
+      "end": 99.7,
+      "sector": "A"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "DININGCAR",
+      "constructionType": "I4112",
+      "hasEconomyClass": false,
+      "hasFirstClass": false
+     },
+     "wagonIdentificationNumber": 36
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 47.9,
+      "end": 73.8,
+      "sector": "A"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "PASSENGERCARRIAGE_FIRST_ECONOMY_CLASS",
+      "constructionType": "I4111",
+      "hasEconomyClass": true,
+      "hasFirstClass": true
+     },
+     "wagonIdentificationNumber": 37
+    },
+    {
+     "amenities": [],
+     "orientation": "BACKWARDS",
+     "platformPosition": {
+      "start": 20,
+      "end": 47.9,
+      "sector": "A"
+     },
+     "status": "OPEN",
+     "type": {
+      "category": "CONTROLCAR_FIRST_CLASS",
+      "constructionType": "I4110",
+      "hasEconomyClass": false,
+      "hasFirstClass": true
+     },
+     "wagonIdentificationNumber": 38
+    }
+   ]
+  }
+ ],
+ "journeyID": "20260924-33974afa-22b5-3b8f-b3ed-638fd29ddd40",
+ "platform": {
+  "end": 445.5,
+  "name": "12",
+  "sectors": [
+   {
+    "name": "A",
+    "start": 0,
+    "end": 88.35
+   },
+   {
+    "name": "B",
+    "start": 88.35,
+    "end": 132.75
+   },
+   {
+    "name": "C",
+    "start": 132.75,
+    "end": 179.5
+   },
+   {
+    "name": "D",
+    "start": 179.5,
+    "end": 226.025
+   },
+   {
+    "name": "E",
+    "start": 226.025,
+    "end": 275.175
+   },
+   {
+    "name": "F",
+    "start": 275.175,
+    "end": 327.1
+   },
+   {
+    "name": "G",
+    "start": 327.1,
+    "end": 445.5
+   }
+  ],
+  "start": 0
+ },
+ "sequenceStatus": "MATCHES_SCHEDULE"
+}

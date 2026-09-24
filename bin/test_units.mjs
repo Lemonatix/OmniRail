@@ -373,6 +373,59 @@ pruefe('ohne jede Kennung: nichts nachzuladen',
 }
 
 // ---------------------------------------------------------------------
+console.log('\nFahrgastrechte — ab wann, wie viel');
+
+{
+  const jetzt = Date.now();
+  const iso = (min) => new Date(jetzt + min * 60000).toISOString();
+  const mit = (verspaetung, laender, original) => {
+    const leg = zug({ category: 'ICE', trainNumber: '724', from: { id: '8000261' }, to: { id: '8000105' },
+      departure: iso(10), arrival: iso(240) });
+    const journey = { arrival: iso(240), countries: laender, legs: [leg], ...(original ? { original } : {}) };
+    return Object.assign(Object.create(LiveTracker.prototype), {
+      journey, risk: null,
+      legs: [{ leg, data: { stops: [{ id: '8000105', arrival: iso(240), arrivalReal: iso(240 + verspaetung) }] } }],
+    });
+  };
+  pruefe('15 min national: noch nichts', mit(15, ['de']).rights(), null);
+  pruefe('25 min national: Zugbindung aufgehoben, noch keine Entschädigung',
+    [mit(25, ['de']).rights()?.trainChoice, mit(25, ['de']).rights()?.share], [true, 0]);
+  pruefe('25 min international: noch nichts (erst ab 60)', mit(25, ['de', 'at']).rights(), null);
+  pruefe('70 min: 25 %', mit(70, ['de', 'ch']).rights()?.share, 25);
+  pruefe('130 min: 50 %', mit(130, ['ch']).rights()?.share, 50);
+  pruefe('Schweiz allein: keine DB-Zugbindung', mit(130, ['ch']).rights()?.trainChoice, false);
+  // Umdisponiert: gezählt wird gegen die gebuchte Ankunft der ersten Wahl.
+  pruefe('nach Umdisponieren zählt die ursprünglich gebuchte Ankunft',
+    mit(0, ['de'], { arrival: iso(170) }).destinationDelay(), 70);
+}
+
+{
+  const lauf = { stops: [
+    { id: '8503000', departure: '2026-09-24T09:02:00+02:00' },
+    { id: '8503016', arrival: '2026-09-24T09:12:00+02:00', departure: '2026-09-24T09:13:00+02:00' },
+    { id: '8500010', arrival: '2026-09-24T10:00:00+02:00' },
+  ] };
+  const leg = zug({ from: { id: '8503000' }, to: { id: '8500010' } });
+  const mitPrognose = LiveTracker.withPrognosis(lauf, leg,
+    { delay: 4, departureReal: '2026-09-24T09:06:00+02:00', platformFrom: '14' });
+  pruefe('Schweizer Prognose: Einstieg, Zwischenhalt verschoben, Echtzeit an',
+    [mitPrognose.stops[0].platform, new Date(mitPrognose.stops[1].arrivalReal).getTime()
+      - new Date('2026-09-24T09:12:00+02:00').getTime(), mitPrognose.hasRealtime],
+    ['14', 4 * 60000, true]);
+}
+
+// ---------------------------------------------------------------------
+console.log('\nWagenreihung — Sektoren kurz');
+
+{
+  const { sectorRange } = await import('../public/assets/js/render.js');
+  const alle = ['A', 'B', 'C', 'D', 'E', 'F', 'G'].map((name) => ({ name }));
+  pruefe('zusammenhängend', sectorRange(['C', 'A', 'B', 'B'], alle), 'A–C');
+  pruefe('mit Lücke', sectorRange(['A', 'D', 'E'], alle), 'A, D–E');
+  pruefe('leer', sectorRange([], alle), '');
+}
+
+// ---------------------------------------------------------------------
 console.log('\nAbfahrtstafel — Filtergruppen');
 
 {

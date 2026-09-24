@@ -53,6 +53,29 @@ async function call(action, params = {}, { signal } = {}) {
 /** Koordinate auf fünf Stellen (rund ein Meter), leer wenn unbekannt. */
 const coord = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(5) : '');
 
+/**
+ * POST ans Backend - bisher nur fürs Teilen einer Fahrt, deren Verbindung
+ * zu groß für eine Adresse ist.
+ */
+async function post(action, body) {
+  const url = new URL(BASE);
+  url.searchParams.set('action', action);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error('Das Backend ist nicht erreichbar.');
+  }
+  let data;
+  try { data = await res.json(); } catch { throw new Error(`Ungültige Antwort (HTTP ${res.status})`); }
+  if (!res.ok || data.ok === false) throw new Error(data.error || `Fehler ${res.status}`);
+  return data;
+}
+
 export const api = {
   health: (opts) => call('health', {}, opts),
 
@@ -128,6 +151,18 @@ export const api = {
       type: params.type || 'dep',
       duration: params.duration || 60,
     }, opts),
+
+  /**
+   * Wagenreihung eines Zuges an einem Bahnhof: Sektoren des Bahnsteigs und
+   * wo jeder Wagen hält. Nur deutscher Fernverkehr am Reisetag.
+   */
+  sequence: (p, opts) => call('sequence', { eva: p.eva, cat: p.cat, num: p.num, time: p.time }, opts),
+
+  /** Eine verfolgte Fahrt zum Teilen ablegen. Liefert `{ id }`. */
+  share: (journey) => post('share', { journey }),
+
+  /** Eine geteilte Fahrt abholen. */
+  shared: (id, opts) => call('shared', { id }, opts),
 
   disruptions: (opts) => call('disruptions', {}, opts),
 

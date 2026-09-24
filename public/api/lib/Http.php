@@ -191,6 +191,14 @@ class Http
                     CURLOPT_SSL_VERIFYPEER => true,
                     CURLOPT_SSL_VERIFYHOST => 2,
                 ]);
+                // Dasselbe Browser-Profil wie in request() - ohne blockt
+                // bahn.de auch die gleichzeitigen Anfragen (Wagenreihung).
+                if ($this->browserTls) {
+                    curl_setopt($ch, CURLOPT_SSL_CIPHER_LIST, self::TLS12_CIPHERS);
+                    if (defined('CURLOPT_TLS13_CIPHERS')) {
+                        curl_setopt($ch, CURLOPT_TLS13_CIPHERS, self::TLS13_CIPHERS);
+                    }
+                }
                 curl_multi_add_handle($multi, $ch);
                 $handles[$k] = $ch;
             }

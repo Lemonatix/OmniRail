@@ -137,8 +137,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // die Routenkarte, siehe works.js.
   initWorks(document.getElementById('works'));
 
-  // Eine laufende Verfolgung überlebt Neuladen und neue Suchen.
-  restoreTracked();
+  // Eine geteilte Fahrt (?live=…) hat Vorrang; sonst überlebt die eigene
+  // Verfolgung Neuladen und neue Suchen.
+  if (!openSharedFahrt()) restoreTracked();
   setupOffline();
 
   // Geteilte Suche direkt ausführen, damit der Empfänger nichts tun muss.
@@ -290,12 +291,52 @@ function saveSettings() {
 
 /** Sichert die verfolgte Verbindung, damit sie ein Neuladen übersteht. */
 function saveTracked(journey) {
+  // Eine fremde, geteilte Fahrt überschreibt nicht die eigene. Sie kommt
+  // beim Neuladen ohnehin wieder - über den Link in der Adresszeile.
+  if (journey?.shared) return;
   try {
     if (!journey) localStorage.removeItem(TRACK_KEY);
     else localStorage.setItem(TRACK_KEY, JSON.stringify(journey));
   } catch {
     // Voller oder gesperrter Storage darf die Verfolgung nicht abbrechen.
   }
+}
+
+/**
+ * Eine geteilte Fahrt öffnen, wenn die Adresse eine trägt.
+ *
+ * Der Link aus "Teilen" in der Live-Verfolgung sieht so aus: `?live=<id>`.
+ * Die Verbindung liegt auf dem eigenen Server; die Echtzeit holt sich die
+ * Verfolgung danach wie bei einer eigenen Fahrt.
+ *
+ * @returns {boolean} ob eine geteilte Fahrt angefragt war
+ */
+function openSharedFahrt() {
+  const id = new URLSearchParams(location.search).get('live');
+  if (!id) return false;
+  api.shared(id)
+    .then((res) => {
+      const journey = { ...res.journey, shared: true };
+      // Längst angekommen: die Verfolgung würde sich sofort selbst beenden,
+      // und man sähe gar nichts. Dann lieber sagen, was los ist.
+      const an = Date.parse(journey.arrivalReal || journey.arrival || '');
+      if (Number.isFinite(an) && Date.now() > an + 15 * 60_000) {
+        const status = $('#status');
+        status.className = 'status';
+        status.textContent = 'Die geteilte Fahrt ist schon angekommen — Ankunft '
+          + new Date(an).toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' }) + '.';
+        restoreTracked();
+        return;
+      }
+      live.start(journey);
+    })
+    .catch((err) => {
+      const status = $('#status');
+      status.className = 'status status--error';
+      status.textContent = `Die geteilte Fahrt lässt sich nicht öffnen: ${err.message}`;
+      restoreTracked();
+    });
+  return true;
 }
 
 /**
@@ -1090,6 +1131,8 @@ function draw() {
     undoAlternative,
     loadPlatforms,
     loadOffers,
+    loadSequence,
+    returnTrip,
   }, showEarlier);
   // Die Karte zeigt genau die Routen, die auch in der Liste stehen. Die
   // Indizes bleiben dabei gültig, weil von vorne geschnitten wird.
@@ -1394,6 +1437,47 @@ function undoAlternative(journey) {
  * gemerkt und serverseitig eine Woche gecacht.
  */
 /**
+ * Wie lange nach der Ankunft die Rückfahrt frühestens losgeht. Eine Stunde
+ * ist ein Kompromiss: wer nur umsteigt, will früher, wer einen Tag bleibt,
+ * später - beides ist mit der Uhrzeit im Formular ein Tipp entfernt, und
+ * der Hinweis unter der Suche sagt, womit gerechnet wurde.
+ */
+const RETURN_AFTER_MIN = 60;
+
+/**
+ * Rückfahrt zu einer Verbindung suchen.
+ *
+ * Getauscht werden die Orte der SUCHE, nicht Start und Ziel der
+ * Verbindung: die Suche kann über einen MVG-Halt, einen Zwischenhalt oder
+ * eine andere Kennung laufen als der erste Zug der Verbindung - die
+ * Verbindung selbst endet vielleicht in "München Hbf (tief)".
+ */
+function returnTrip(journey) {
+  const an = new Date(journey.arrivalReal || journey.arrival || '');
+  if (Number.isNaN(an.getTime()) || !state.from || !state.to) return;
+
+  // Auf volle fünf Minuten aufrunden - 13:07 als Suchzeit liest sich schlecht.
+  const ab = new Date(an.getTime() + RETURN_AFTER_MIN * 60000);
+  ab.setMinutes(Math.ceil(ab.getMinutes() / 5) * 5, 0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+
+  [state.from, state.to] = [state.to, state.from];
+  state.date = `${ab.getFullYear()}-${pad(ab.getMonth() + 1)}-${pad(ab.getDate())}`;
+  state.time = `${pad(ab.getHours())}:${pad(ab.getMinutes())}`;
+  state.arrival = false;
+  applyStateToForm();
+  saveSettings();
+
+  $('#search-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  runSearch().then(() => {
+    const status = $('#status');
+    if (status && !status.classList.contains('status--error')) {
+      status.textContent += ` · Rückfahrt ab ${state.time}, eine Stunde nach der Ankunft — Uhrzeit oben anpassbar`;
+    }
+  });
+}
+
+/**
  * Tarife je Verbindung, einmal geladen. Der Schlüssel enthält Klasse und
  * Abos: dieselbe Verbindung kostet mit BahnCard etwas anderes. Ein Fehler
  * wird nicht gemerkt - beim nächsten Aufklappen soll es erneut versucht
@@ -1414,6 +1498,20 @@ function loadOffers(journey) {
     }));
   }
   return offersCache.get(key);
+}
+
+/** Wagenreihungen je Zug und Bahnhof - eine Abfrage je Umstiegsplan. */
+const sequenceCache = new Map();
+
+function loadSequence(p) {
+  const key = [p.eva, p.cat, p.num, String(p.time).slice(0, 16)].join('|');
+  if (!sequenceCache.has(key)) {
+    sequenceCache.set(key, api.sequence(p).catch((err) => {
+      sequenceCache.delete(key);
+      throw err;
+    }));
+  }
+  return sequenceCache.get(key);
 }
 
 const platformCache = new Map();

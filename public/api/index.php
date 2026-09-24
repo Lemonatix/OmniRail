@@ -14,6 +14,9 @@
  *   ?action=localroute&fromLat=..&toLat=..  Ersatzweg im MVV (U-Bahn, Tram, Bus) über die MVG
  *   ?action=offers&ctx=..                   Alle DB-Tarife einer Verbindung samt Bedingungen
  *   ?action=departures&station=..           Abfahrts-/Ankunftstafel (HAFAS, in München plus MVG)
+ *   ?action=sequence&eva=..&cat=..&num=..&time=..  Wagenreihung eines Zuges an einem Bahnhof (Sektoren, Wagen)
+ *   POST ?action=share                      Verfolgte Verbindung zum Teilen ablegen, liefert eine Kennung
+ *   ?action=shared&id=..                    Geteilte Verbindung abholen
  *   ?action=fxrate                          EZB-Tageskurse (für CHF neben EUR)
  *   ?action=platforms&lat=..&lon=..         Bahnsteiglage aus OSM für den Umstiegsplan
  *   ?action=works                           Bauarbeiten im Netz, mit Abschnitt und Zeitraum
@@ -124,6 +127,7 @@ require __DIR__ . '/lib/Providers/CoachSequence.php';
 require __DIR__ . '/lib/Providers/Mvg.php';
 require __DIR__ . '/lib/Providers/Overpass.php';
 require __DIR__ . '/lib/Providers/StreckenInfo.php';
+require __DIR__ . '/lib/Providers/SwissOpenData.php';
 require __DIR__ . '/lib/RailGeometry.php';
 require __DIR__ . '/lib/CityTrips.php';
 
@@ -145,7 +149,7 @@ if ($origins !== []) {
 }
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
-    header('Access-Control-Allow-Methods: GET, OPTIONS');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
     header('Access-Control-Allow-Headers: Content-Type');
     http_response_code(204);
     exit;
@@ -193,12 +197,30 @@ const RATE_COST = [
     'nextconnection' => 4,
     'offers'         => 4,
     'departures'     => 2,
+    'sequence'       => 2,
+    // Teuer mit Absicht: jeder Aufruf legt eine Datei an.
+    'share'          => 10,
+    'shared'         => 1,
     'bestprices'     => 5,
     'journeys'       => 5,
 ];
 
 /** Voreinstellung für alles, was nicht in der Tabelle steht. */
 const RATE_COST_DEFAULT = 3;
+
+// Oben und nicht bei handleShare(): Konstanten auf oberster Ebene gibt es
+// erst, wenn PHP die Zeile erreicht hat - und der Router darunter läuft
+// vorher los.
+/**
+ * Wie lange eine geteilte Verbindung abrufbar bleibt - höchstens. Früher
+ * endet sie sechs Stunden nach der Ankunft; danach will niemand mehr
+ * mitverfolgen, und die Datei soll nicht ewig liegen.
+ */
+const SHARE_MAX_TTL = 3 * 86400;
+const SHARE_AFTER_ARRIVAL = 6 * 3600;
+/** Eine Verbindung mit Streckenverlauf ist selten über 150 kB. */
+const SHARE_MAX_BYTES = 400000;
+
 
 // Ab hier wird jeder Aufruf nach draußen mitgezählt - check.php zeigt es.
 Health::watch((string) $config['cache_dir']);
@@ -247,6 +269,15 @@ try {
         case 'departures':
             handleDepartures($http, $config, $cache);
             break;
+        case 'sequence':
+            handleSequence($http, $config, $cache);
+            break;
+        case 'share':
+            handleShare($cache);
+            break;
+        case 'shared':
+            handleShared($cache);
+            break;
         case 'fxrate':
             handleFxRate($http, $config, $cache);
             break;
@@ -260,7 +291,7 @@ try {
             handleDisruptions($http, $config, $cache);
             break;
         default:
-            fail('Unbekannte Aktion. Erlaubt: health, catalogue, locations, journeys, livetrains, traindetails, bestprices, nextconnection, localroute, offers, departures, fxrate, platforms, works, disruptions', 400);
+            fail('Unbekannte Aktion. Erlaubt: health, catalogue, locations, journeys, livetrains, traindetails, bestprices, nextconnection, localroute, offers, departures, sequence, share, shared, fxrate, platforms, works, disruptions', 400);
     }
 } catch (Throwable $e) {
     // Details bleiben im Log, der Client bekommt nur eine generische Meldung.
@@ -417,6 +448,39 @@ function handleTrainDetails(Http $http, array $config, Cache $cache): void
         $res = (new DbVendo($http, $config['providers']['db']))->trip($dbId);
         if (!$res['ok']) {
             fail('Zuglauf bei der DB nicht verfügbar: ' . $res['error'], 502);
+        }
+        $cache->set($key, $res['data']);
+        ok(['train' => $res['data'], 'cached' => false]);
+    }
+
+    // Schweiz: Prognose der SBB über transport.opendata.ch, wenn HAFAS für
+    // einen Schweizer Zug nur den Fahrplan kennt. Siehe SwissOpenData.
+    $chFrom = trim((string) ($_GET['chFrom'] ?? ''));
+    if ($chFrom !== '') {
+        $leg = [
+            'from' => $chFrom,
+            'to'   => trim((string) ($_GET['chTo'] ?? '')),
+            'cat'  => trim((string) ($_GET['cat'] ?? '')),
+            'dir'  => mb_substr(trim((string) ($_GET['dir'] ?? '')), 0, 80),
+            'dep'  => trim((string) ($_GET['dep'] ?? '')),
+            'arr'  => trim((string) ($_GET['arr'] ?? '')),
+        ];
+        if (!preg_match('/^85\d{5}$/', $leg['from']) || !preg_match('/^85\d{5}$/', $leg['to'])
+            || !preg_match('/^[A-Za-z]{0,5}$/', $leg['cat'])
+            || strtotime($leg['dep']) === false || strtotime($leg['arr']) === false) {
+            fail('Parameter für die Schweizer Echtzeit ungültig.', 400);
+        }
+        if (($config['providers']['swiss']['enabled'] ?? false) !== true) {
+            fail('Die Schweizer Quelle ist abgeschaltet.', 400);
+        }
+        $key = 'jdch:' . md5(json_encode($leg));
+        $cached = $cache->get($key, 30);
+        if ($cached !== null) {
+            ok(['train' => $cached, 'cached' => true]);
+        }
+        $res = (new SwissOpenData($http, $config['providers']['swiss']))->trip($leg);
+        if (!$res['ok']) {
+            fail('Schweizer Echtzeit nicht verfügbar: ' . $res['error'], 502);
         }
         $cache->set($key, $res['data']);
         ok(['train' => $res['data'], 'cached' => false]);
@@ -992,6 +1056,140 @@ function mergeBoards(array $hafas, array $mvg): array
         $hafas[$i]['source'] = 'hafas+mvg';
     }
     return $hafas;
+}
+
+/**
+ * Wagenreihung eines Zuges an einem Bahnhof - für den Umstiegsplan.
+ *
+ * Wo am Bahnsteig hält welcher Wagen, wo ist die 1. Klasse, wo das
+ * Bordrestaurant, und welche Sektoren hat der Bahnsteig. Nur deutscher
+ * Fernverkehr am Reisetag; sonst ist die Antwort leer.
+ *
+ * `time` darf ein paar Minuten danebenliegen (nachgemessen: ±8 min gehen) -
+ * für den ankommenden Zug genügt deshalb seine Ankunftszeit.
+ */
+function handleSequence(Http $http, array $config, Cache $cache): void
+{
+    $eva  = trim((string) ($_GET['eva'] ?? ''));
+    $cat  = strtoupper(trim((string) ($_GET['cat'] ?? '')));
+    $num  = trim((string) ($_GET['num'] ?? ''));
+    $time = trim((string) ($_GET['time'] ?? ''));
+    if (!preg_match('/^\d{7}$/', $eva) || !preg_match('/^[A-Z]{1,5}$/', $cat)
+        || !preg_match('/^\d{1,6}$/', $num) || strtotime($time) === false) {
+        fail('Parameter "eva", "cat", "num" und "time" sind erforderlich.', 400);
+    }
+    $wr = $config['providers']['wagenreihung'] ?? [];
+    if (($wr['enabled'] ?? false) !== true || !str_starts_with($eva, '80')
+        || !in_array($cat, ['ICE', 'IC', 'EC', 'ECE'], true)) {
+        ok(['sequence' => null]);
+    }
+    $cs = new CoachSequence($http, $wr, $cache);
+    ok(['sequence' => $cs->sequence($eva, $num, $cat, $time)]);
+}
+
+/**
+ * Eine verfolgte Verbindung zum Teilen ablegen.
+ *
+ * WOZU: "Ich bin im ICE 724, Ankunft 12:07" als Link, der beim Empfänger
+ * live weiterläuft - mit derselben Verfolgung, die man selbst sieht. Die
+ * Verbindung passt nicht in eine Adresse (sie trägt den Streckenverlauf
+ * mit), also liegt sie hier unter einer zufälligen Kennung.
+ *
+ * Gespeichert wird nur die Verbindung, wie sie die App ohnehin kennt:
+ * Züge, Halte, Zeiten. Kein Standort, keine Kennung des Teilenden. Die
+ * Echtzeit holt sich der Empfänger selbst.
+ */
+function handleShare(Cache $cache): void
+{
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        fail('Teilen geht nur per POST.', 405);
+    }
+    if (!$cache->isAvailable()) {
+        fail('Teilen ist auf diesem Server nicht möglich (Cache nicht beschreibbar).', 503);
+    }
+    $raw = (string) file_get_contents('php://input', false, null, 0, SHARE_MAX_BYTES * 2 + 1);
+    if ($raw === '' || strlen($raw) > SHARE_MAX_BYTES * 2) {
+        fail('Die Verbindung fehlt oder ist zu groß.', 413);
+    }
+    try {
+        $in = json_decode($raw, true, 64, JSON_THROW_ON_ERROR);
+    } catch (JsonException) {
+        fail('Die Verbindung ist kein gültiges JSON.', 400);
+    }
+    $j = is_array($in) ? ($in['journey'] ?? null) : null;
+    if (!is_array($j) || !is_array($j['legs'] ?? null) || $j['legs'] === []) {
+        fail('Das ist keine Verbindung.', 400);
+    }
+
+    $j = shareSlim($j);
+    $json = json_encode($j, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '';
+    // Zu groß? Dann ohne Streckenverlauf - die Karte zieht dann Geraden
+    // zwischen den Halten, verfolgen lässt sich die Fahrt trotzdem.
+    if (strlen($json) > SHARE_MAX_BYTES) {
+        foreach ($j['legs'] as $i => $leg) {
+            unset($j['legs'][$i]['geometry']);
+        }
+        $json = json_encode($j, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '';
+    }
+    if (strlen($json) > SHARE_MAX_BYTES) {
+        fail('Die Verbindung ist zu groß zum Teilen.', 413);
+    }
+
+    $arrival = toTimestamp(is_string($j['arrival'] ?? null) ? $j['arrival'] : null) ?? time();
+    $expires = min(time() + SHARE_MAX_TTL, max(time() + 3600, $arrival + SHARE_AFTER_ARRIVAL));
+
+    // 12 Zeichen aus 62: nicht zu erraten, und kurz genug für eine Nachricht.
+    $zeichen = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    $id = '';
+    foreach (str_split(random_bytes(12)) as $b) {
+        $id .= $zeichen[ord($b) % strlen($zeichen)];
+    }
+
+    $cache->set('share:' . $id, ['journey' => $j, 'expires' => $expires]);
+    ok(['id' => $id, 'expires' => date('c', $expires)]);
+}
+
+/**
+ * Nur, was die Verfolgung braucht. Alles andere - Preise, Tarifschlüssel,
+ * Pünktlichkeitshistorie, Anzeigezustand der Liste - bleibt beim Teilenden.
+ */
+function shareSlim(array $j): array
+{
+    $journeyKeys = ['id', 'departure', 'arrival', 'departureReal', 'arrivalReal', 'durationMin',
+        'changes', 'countries', 'legs', 'source', 'rerouted', 'trains'];
+    $legKeys = ['mode', 'kind', 'jid', 'dbJourneyId', 'category', 'categoryName', 'line', 'trainNumber',
+        'name', 'direction', 'operator', 'from', 'to', 'stops', 'departure', 'arrival', 'departureReal',
+        'arrivalReal', 'durationMin', 'cancelled', 'geometry', 'changesPlace', 'transferMin'];
+    $out = array_intersect_key($j, array_flip($journeyKeys));
+    $out['legs'] = [];
+    foreach ($j['legs'] as $leg) {
+        if (is_array($leg)) {
+            $out['legs'][] = array_intersect_key($leg, array_flip($legKeys));
+        }
+    }
+    // Die ursprünglich gebuchte Ankunft, für die Fahrgastrechte beim Empfänger.
+    $gebucht = $j;
+    for ($n = 0; is_array($gebucht['original'] ?? null) && $n < 10; $n++) {
+        $gebucht = $gebucht['original'];
+    }
+    if ($gebucht !== $j && isset($gebucht['arrival'])) {
+        $out['bookedArrival'] = $gebucht['arrival'];
+    }
+    return $out;
+}
+
+/** Eine geteilte Verbindung abholen. */
+function handleShared(Cache $cache): void
+{
+    $id = (string) ($_GET['id'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9]{8,20}$/', $id)) {
+        fail('Diese Kennung gibt es nicht.', 404);
+    }
+    $hit = $cache->get('share:' . $id, SHARE_MAX_TTL);
+    if (!is_array($hit) || ($hit['expires'] ?? 0) < time()) {
+        fail('Diese geteilte Verbindung ist abgelaufen oder existiert nicht.', 404);
+    }
+    ok(['journey' => $hit['journey'], 'expires' => date('c', (int) $hit['expires'])]);
 }
 
 /** Zugnummer des ersten Zuges einer Verbindung, '' wenn unbekannt. */

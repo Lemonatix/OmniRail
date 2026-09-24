@@ -45,6 +45,24 @@ const SAFE_TRANSFER_MIN = 2;
 /** Nur solange die Verbindung noch läuft, ist Auffrischen sinnvoll. */
 const STALE_AFTER_ARRIVAL_MS = 15 * 60_000;
 
+/**
+ * Fahrgastrechte, nachgelesen bei DB und SBB (2026-09):
+ *
+ *   - Entschädigung ab 60 Minuten Verspätung am Ziel 25 %, ab 120 Minuten
+ *     50 % des Fahrpreises. So in der EU (DB, ÖBB) und in der Schweiz.
+ *   - Zugbindung aufgehoben (DB): bei erwarteter Verspätung am Ziel ab 20
+ *     Minuten auf innerdeutschen Reisen, ab 60 Minuten auf internationalen.
+ */
+const RIGHTS = [
+  { min: 120, share: 50 },
+  { min: 60, share: 25 },
+];
+const RIGHTS_LINKS = {
+  de: ['DB', 'https://www.bahn.de/service/informationen-buchung/fahrgastrechte'],
+  at: ['ÖBB', 'https://www.oebb.at/de/reiseplanung-services/nach-ihrer-reise/fahrgastrechte'],
+  ch: ['SBB', 'https://www.sbb.ch/de/hilfe-und-kontakt/erstattung-entschaedigung/rueckerstattung/entschaedigung-bei-verspaetung.html'],
+};
+
 /** Ob Benachrichtigungen gewünscht sind - gilt über die einzelne Fahrt hinaus. */
 const NOTIFY_KEY = 'train-maxxing:notify';
 
@@ -183,6 +201,67 @@ export class LiveTracker {
     document.addEventListener('visibilitychange', this._onVisible);
   }
 
+  /**
+   * Die Fahrt teilen.
+   *
+   * Die Verbindung geht an den eigenen Server (sie ist zu groß für eine
+   * Adresse) und kommt unter einer zufälligen Kennung zurück. Der Link
+   * öffnet beim Empfänger dieselbe Verfolgung; die Echtzeit holt sich dessen
+   * Browser selbst. Auf dem Telefon öffnet sich das Teilen-Menü, sonst
+   * landet Text und Link in der Zwischenablage.
+   */
+  async share() {
+    if (!this.journey) return;
+    this.shareState = 'teile …';
+    this.render();
+    try {
+      const res = await api.share(this.journey);
+      const url = new URL(location.pathname, location.origin);
+      url.searchParams.set('live', res.id);
+      const text = this.shareText();
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: 'Meine Fahrt', text, url: url.href });
+          this.shareState = 'geteilt';
+        } catch (err) {
+          // Abgebrochen ist kein Fehler; der Link ist trotzdem angelegt.
+          if (err?.name !== 'AbortError') throw err;
+          this.shareState = null;
+        }
+      } else {
+        await navigator.clipboard.writeText(`${text}
+${url.href}`);
+        this.shareState = 'Link kopiert';
+      }
+    } catch (err) {
+      this.shareState = null;
+      this.error = `Teilen ging nicht: ${err.message}`;
+    }
+    this.render();
+    // Nach ein paar Sekunden wieder der normale Knopf.
+    setTimeout(() => { if (this.shareState !== 'teile …') { this.shareState = null; this.render(); } }, 4000);
+  }
+
+  /**
+   * Der Satz zum Link: wo man ist, wann man ankommt.
+   * "Unterwegs nach Frankfurt(Main)Hbf mit ICE 724, Ankunft 12:07 (+4 min)."
+   */
+  shareText() {
+    const trains = this.legs;
+    const letzter = trains[trains.length - 1];
+    const ziel = letzter?.leg.to?.name || '';
+    const jetzt = this.currentEntry() || trains.find((e) =>
+      Date.parse(e.leg.departureReal || e.leg.departure || '') > Date.now()) || trains[0];
+    const an = letzter ? LiveTracker.legTime(letzter, 'arrival') : null;
+    const delay = this.destinationDelay();
+    const zeit = an ? fmtTime(new Date(an.at).toISOString()) : fmtTime(this.journey.arrival);
+    return `Unterwegs nach ${ziel}`
+      + (jetzt ? ` mit ${trainLabel(jetzt.leg)}` : '')
+      + (zeit ? `, Ankunft ${zeit}` : '')
+      + (delay && delay > 0 ? ` (+${delay} min)` : '')
+      + '. Live mitverfolgen:';
+  }
+
   /** Kann dieser Browser überhaupt benachrichtigen? */
   static canNotify() {
     return typeof window !== 'undefined' && 'Notification' in window && window.isSecureContext;
@@ -250,6 +329,20 @@ export class LiveTracker {
           if (db.train?.hasRealtime) return db;
         } catch { /* dann eben der Fahrplan von HAFAS */ }
       }
+      // Schweizer Abschnitt ohne Ist-Zeit: die Prognose der SBB über
+      // opendata.ch, eingesetzt in den Zuglauf von HAFAS.
+      const ch = (id) => /^85\d{5}$/.test(String(id || ''));
+      if (!res.train?.hasRealtime && ch(leg.from?.id) && ch(leg.to?.id)) {
+        try {
+          const sbb = await api.trainRun({
+            chFrom: leg.from.id, chTo: leg.to.id, cat: leg.category || '',
+            dir: leg.direction || '', dep: leg.departure, arr: leg.arrival,
+          });
+          if (sbb.train?.hasRealtime) {
+            res.train = LiveTracker.withPrognosis(res.train, leg, sbb.train);
+          }
+        } catch { /* dann eben der Fahrplan */ }
+      }
       return res;
     }
     if (entry.src === 'db') return api.trainRun({ db: leg.dbJourneyId });
@@ -264,6 +357,30 @@ export class LiveTracker {
     // Halteliste und Zugposition auf der Karte vollständig.
     res.train = { ...res.train, stops: LiveTracker.mergeStops(leg.stops || [], res.train) };
     return res;
+  }
+
+  /**
+   * Einen Zuglauf von HAFAS um die Schweizer Prognose ergänzen.
+   *
+   * Die Prognose gilt für Ein- und Ausstieg; die Halte dazwischen werden
+   * um die Verspätung verschoben, der Rest des Laufs bleibt, wie er ist.
+   */
+  static withPrognosis(run, leg, sbb) {
+    const stops = run?.stops || [];
+    const idx = (place) => stops.findIndex((s) => String(s.id) === String(place?.id));
+    const a = idx(leg.from);
+    const b = idx(leg.to);
+    const delay = Number.isFinite(sbb.delay) ? sbb.delay : null;
+    const shift = (iso) => (iso && delay !== null ? new Date(Date.parse(iso) + delay * 60000).toISOString() : null);
+    const neu = stops.map((s, i) => {
+      if (i === a) return { ...s, departureReal: sbb.departureReal ?? shift(s.departure), platform: sbb.platformFrom ?? s.platform };
+      if (i === b) return { ...s, arrivalReal: sbb.arrivalReal ?? shift(s.arrival), platform: sbb.platformTo ?? s.platform };
+      if (a >= 0 && b > a && i > a && i < b) {
+        return { ...s, departureReal: shift(s.departure), arrivalReal: shift(s.arrival) };
+      }
+      return s;
+    });
+    return { ...run, stops: neu, hasRealtime: true, delay: delay ?? run?.delay, realtimeSource: 'opendata.ch' };
   }
 
   /**
@@ -306,6 +423,7 @@ export class LiveTracker {
     this.error = null;
     this.alerted = new Map();
     this.alertBaseline = true;
+    this.shareState = null;
     this.panel.hidden = false;
 
     // Route sofort zeichnen, ohne auf die Echtzeitdaten zu warten.
@@ -535,6 +653,17 @@ export class LiveTracker {
       });
     }
 
+    const rechte = this.rights();
+    if (rechte?.share) {
+      out.push({
+        key: 'rights',
+        level: rechte.share,
+        title: `Entschädigung: ${rechte.share} %`,
+        body: `Ankunft voraussichtlich ${rechte.delay} min später als geplant — `
+          + `dir stehen ${rechte.share} % des Fahrpreises zu.`,
+      });
+    }
+
     this.legs.forEach((entry, i) => {
       const an = Date.parse(entry.leg.arrivalReal || entry.leg.arrival || '');
       if (Number.isFinite(an) && an < now) return; // liegt hinter einem
@@ -654,6 +783,85 @@ export class LiveTracker {
       || stops.find((s) => s.name === entry.leg.from?.name);
     const now = String(ein?.platform || '').trim();
     return now && now !== planned ? { planned, now } : null;
+  }
+
+  /**
+   * Verspätung am Ziel gegenüber dem, was ursprünglich gebucht war.
+   *
+   * Nach einem Umdisponieren ist die Verbindung eine andere; maßgeblich für
+   * die Fahrgastrechte bleibt aber die geplante Ankunft der ersten Wahl.
+   * Gezählt wird nur mit Echtzeit - eine Fahrplanzeit sagt nichts über
+   * Verspätung.
+   *
+   * @returns {?number} Minuten, oder null wenn unbekannt
+   */
+  destinationDelay() {
+    const last = this.legs[this.legs.length - 1];
+    if (!last || !this.journey) return null;
+    let gebucht = this.journey;
+    while (gebucht.original) gebucht = gebucht.original;
+    // Eine geteilte Verbindung bringt die gebuchte Ankunft als eigenes Feld mit.
+    const plan = Date.parse(gebucht.bookedArrival || gebucht.arrival || '');
+    const t = LiveTracker.legTime(last, 'arrival');
+    if (!t?.live || !Number.isFinite(plan)) return null;
+    return Math.round((t.at - plan) / 60000);
+  }
+
+  /**
+   * Was gilt gerade an Fahrgastrechten?
+   *
+   * @returns {?{delay:number, share:number, trainChoice:boolean, national:boolean}}
+   */
+  rights() {
+    const delay = this.destinationDelay();
+    const ausfall = this.risk?.status === 'cancelled';
+    if ((delay == null || delay < 20) && !ausfall) return null;
+    const laender = this.journey?.countries || [];
+    const national = laender.length > 0 && laender.every((c) => c === 'de');
+    const share = RIGHTS.find((r) => (delay ?? 0) >= r.min)?.share ?? 0;
+    // Aufgehoben ist die Zugbindung bei der DB ab 20 min (national) bzw.
+    // 60 min (international) erwarteter Verspätung - oder bei Ausfall.
+    const trainChoice = laender.includes('de')
+      && (ausfall || (delay ?? 0) >= (national ? 20 : 60));
+    if (!share && !trainChoice) return null;
+    return { delay: delay ?? 0, share, trainChoice, national };
+  }
+
+  /** Der Kasten zu den Fahrgastrechten, oder null. */
+  renderRights() {
+    const r = this.rights();
+    if (!r) return null;
+    const box = el('section', 'live__rights');
+    box.append(el('strong', null, 'Fahrgastrechte'));
+
+    if (r.trainChoice) {
+      box.append(el('p', 'live__rights-text',
+        'Die Zugbindung ist aufgehoben: mit Sparpreis oder Super Sparpreis darfst du '
+        + 'einen anderen Zug zum selben Ziel nehmen'
+        + (r.national ? ' (DB, ab 20 Minuten erwarteter Verspätung).' : ' (DB, international ab 60 Minuten).')));
+    }
+    if (r.share) {
+      box.append(el('p', 'live__rights-text',
+        `Voraussichtlich ${r.delay} Minuten später am Ziel — dir stehen ${r.share} % des Fahrpreises zu `
+        + '(ab 60 Minuten 25 %, ab 120 Minuten 50 %). Kleinstbeträge unter 4 € bzw. 5 CHF zahlen DB und SBB nicht aus.'));
+    }
+
+    const links = (this.journey?.countries || [])
+      .map((c) => RIGHTS_LINKS[c]).filter(Boolean);
+    if (links.length > 0) {
+      const p = el('p', 'live__rights-links');
+      p.append(document.createTextNode('Beantragen: '));
+      links.forEach(([name, href], i) => {
+        if (i > 0) p.append(document.createTextNode(' · '));
+        const a = el('a', null, name);
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        p.append(a);
+      });
+      box.append(p);
+    }
+    return box;
   }
 
   /** Der Satz zur Gefahr - im Panel und in der Benachrichtigung derselbe. */
@@ -1235,6 +1443,10 @@ export class LiveTracker {
     // Information, wegen der man überhaupt hinschaut.
     if (this.risk) p.append(this.renderRisk());
 
+    // Direkt darunter, was einem deswegen zusteht.
+    const rechte = this.renderRights();
+    if (rechte) p.append(rechte);
+
     for (const entry of this.legs) p.append(this.renderLeg(entry));
 
     // MVG-Meldungen: nur die Überschrift, der Fließtext zum Aufklappen, und
@@ -1254,7 +1466,7 @@ export class LiveTracker {
     const head = el('div', 'live__head');
 
     const title = el('div', 'live__title');
-    title.append(el('strong', null, 'Live'));
+    title.append(el('strong', null, this.journey.shared ? 'Geteilt' : 'Live'));
     const from = this.journey.legs?.[0]?.from?.name;
     const trains = this.journey.legs?.filter((l) => l.mode === 'train') || [];
     const to = trains[trains.length - 1]?.to?.name;
@@ -1300,6 +1512,14 @@ export class LiveTracker {
       bell.addEventListener('click', () => this.toggleNotify());
       ctl.append(bell);
     }
+
+    // Ankunft teilen: ein Link, der beim Empfänger live mitläuft.
+    const teilen = el('button', 'live__gps live__share', this.shareState || 'Teilen');
+    teilen.type = 'button';
+    teilen.title = 'Einen Link verschicken, mit dem andere diese Fahrt live mitverfolgen.';
+    teilen.disabled = this.shareState === 'teile …';
+    teilen.addEventListener('click', () => this.share());
+    ctl.append(teilen);
 
     const stand = this.updatedAt ? `Stand ${fmtTime(this.updatedAt.toISOString())}` : '';
     const stamp = el('span', 'live__stamp',

@@ -176,7 +176,12 @@ return [
             // nicht mit einem Fehler, den man als solchen erkennt. Wenn die
             // Baureihe irgendwann wieder fehlt: check.php sagt es, und hier
             // ist die Stelle.
-            'endpoint'    => 'https://bahn.expert/api/trpc',
+            // Seit 2026-09 direkt bei bahn.de (source 'bahnde'). Die
+            // Alternative ist 'bahnexpert' mit dem Endpunkt
+            // https://bahn.expert/api/trpc - der antwortete zuletzt mit
+            // HTTP 500, siehe lib/Providers/CoachSequence.php.
+            'source'      => 'bahnde',
+            'endpoint'    => 'https://www.bahn.de/web/api/reisebegleitung/wagenreihung/vehicle-sequence',
             // Wie viele Züge je SUCHE höchstens nachgeschlagen werden - nicht
             // je Verbindung. Sonst wüchse die Last mit der Zahl der Treffer.
             // Die Abfragen laufen gleichzeitig, zwölf kosten daher etwa so

@@ -62,7 +62,9 @@ export function renderResults(container, ranked, marks, state, onSelect, onMore,
   }
 
   if (ranked.length === 0) {
-    container.append(el('p', 'empty', 'Keine Verbindungen gefunden.'));
+    // Nur nach einer Suche - beim Öffnen einer geteilten Fahrt hat noch
+    // niemand gesucht, und "keine Verbindungen" wäre dort falsch.
+    if (state.lastPayload) container.append(el('p', 'empty', 'Keine Verbindungen gefunden.'));
     return;
   }
 
@@ -154,7 +156,7 @@ function renderEarlier(state, onEarlier) {
 /** Hinweiszeile auf eine verfolgte Verbindung, die nicht in der Liste steht. */
 function renderTrackedBar(journey, liveCtl) {
   const bar = el('div', 'tracked-bar');
-  bar.append(el('span', 'tracked-bar__label', 'Du verfolgst'));
+  bar.append(el('span', 'tracked-bar__label', journey.shared ? 'Geteilte Fahrt' : 'Du verfolgst'));
 
   const trains = (journey.legs || []).filter((l) => l.mode === 'train');
   const to = trains[trains.length - 1]?.to?.name;
@@ -427,8 +429,9 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
   }
   card.append(chain);
 
-  // --- Live verfolgen ---
-  // Steht vor den Details, weil es unterwegs die häufigste Handlung ist.
+  // --- Live verfolgen, Rückfahrt ---
+  // Stehen vor den Details, weil sie die häufigsten Handlungen sind.
+  const aktionen = el('div', 'card-actions');
   if (liveCtl?.trackable(j)) {
     const tracking = liveCtl.isTracking(j);
     const btn = el('button', 'live-btn', tracking ? 'Verfolgung beenden' : 'Live verfolgen');
@@ -440,8 +443,21 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
       e.stopPropagation(); // nicht zugleich die Karte umschalten
       liveCtl.toggle(j);
     });
-    card.append(btn);
+    aktionen.append(btn);
   }
+  // Mit einem Tipp zurück: Start und Ziel getauscht, ab der Ankunft dieser
+  // Verbindung. Vorher hieß das: tauschen, Datum prüfen, Uhrzeit ausrechnen.
+  if (liveCtl?.returnTrip) {
+    const back = el('button', 'live-btn return-btn', 'Rückfahrt');
+    back.type = 'button';
+    back.title = 'Rückfahrt suchen — ab einer Stunde nach der Ankunft dieser Verbindung.';
+    back.addEventListener('click', (e) => {
+      e.stopPropagation();
+      liveCtl.returnTrip(j);
+    });
+    aktionen.append(back);
+  }
+  if (aktionen.childElementCount > 0) card.append(aktionen);
 
   // --- Detailbereich ---
   //
@@ -736,6 +752,36 @@ function renderTransferPlan(journey, leg, actions) {
   const body = el('div', 'xfer__body', 'Lade Bahnsteige …');
   box.append(body);
 
+  // Darunter die Wagenreihung beider Züge - eigener Kasten, damit das
+  // Nachladen des Plans ihn nicht überschreibt.
+  const wagen = el('div', 'wagen');
+  box.append(wagen);
+  let wagenGeladen = false;
+  const ladeWagen = async () => {
+    if (wagenGeladen || !actions.loadSequence) return;
+    wagenGeladen = true;
+    const fern = (l) => /^(ICE|IC|EC|ECE)$/i.test(String(l.category || '').trim()) && l.trainNumber;
+    const fragen = [
+      ['Ankunft', prev, prev.to?.id, prev.arrival],
+      ['Abfahrt', leg, leg.from?.id, leg.departure],
+    ].filter(([, l, eva, t]) => fern(l) && eva && t && String(eva).startsWith('80'));
+    if (fragen.length === 0) return;
+    const antworten = await Promise.all(fragen.map(([, l, eva, t]) => actions.loadSequence({
+      eva: String(eva), cat: String(l.category).trim().toUpperCase(), num: String(l.trainNumber), time: t,
+    }).catch(() => null)));
+    const teile = [];
+    fragen.forEach(([rolle, l], i) => {
+      const seq = antworten[i]?.sequence;
+      if (seq?.vehicles?.length) teile.push(renderSequence(rolle, l, seq));
+    });
+    if (teile.length === 0) return;
+    wagen.replaceChildren(
+      el('p', 'wagen__title', 'Wagenreihung'),
+      ...teile,
+      el('p', 'wagen__source', 'Von der DB, nur für deutschen Fernverkehr am Reisetag. Sektor A ist links.'),
+    );
+  };
+
   // WIEDERHOLEN, statt den Fehler stehen zu lassen.
   //
   // Overpass ist ein Gemeinschaftsdienst und stellt Anfragen bei Last in eine
@@ -786,10 +832,96 @@ function renderTransferPlan(journey, leg, actions) {
   box.open = Boolean(leg._xferOpen);
   box.addEventListener('toggle', () => {
     leg._xferOpen = box.open;
-    if (box.open) laden();
+    if (box.open) { laden(); ladeWagen(); }
   });
-  if (box.open) laden();
+  if (box.open) { laden(); ladeWagen(); }
 
+  return box;
+}
+
+/**
+ * Sektoren als kurze Angabe: ["A","B","C","E"] → "A–C, E".
+ *
+ * @param {string[]} liste  Sektoren, in beliebiger Reihenfolge, mit Doppelten
+ * @param {object[]} alle   die Sektoren des Bahnsteigs, in Lage-Reihenfolge
+ */
+export function sectorRange(liste, alle) {
+  const reihe = (alle || []).map((s) => s.name);
+  const idx = [...new Set(liste.filter(Boolean))]
+    .map((n) => reihe.indexOf(n)).filter((i) => i >= 0).sort((a, b) => a - b);
+  if (idx.length === 0) return '';
+  const teile = [];
+  let von = idx[0];
+  let bis = idx[0];
+  for (const i of [...idx.slice(1), Infinity]) {
+    if (i === bis + 1) { bis = i; continue; }
+    teile.push(von === bis ? reihe[von] : `${reihe[von]}–${reihe[bis]}`);
+    von = i;
+    bis = i;
+  }
+  return teile.join(', ');
+}
+
+/**
+ * Ein Zug am Bahnsteig: Sektoren oben, Wagen darunter, maßstäblich.
+ *
+ * Darunter in Worten, was man beim Umsteigen wissen will: wo die 1. Klasse
+ * hält, wo das Bordrestaurant, wo Fahrräder mitdürfen - und ob der Zug
+ * GETEILT wird. Ein Flügelzug mit zwei Zielen ist die Falle, in die man
+ * sonst tappt: vorn nach Wien, hinten nach Innsbruck.
+ */
+function renderSequence(rolle, leg, seq) {
+  const box = el('div', 'wagen__zug');
+  box.append(el('p', 'wagen__head',
+    `${rolle} ${trainLabel(leg)}${seq.platform ? ` · Gleis ${seq.platform}` : ''}`));
+
+  const len = seq.length || Math.max(...seq.vehicles.map((v) => v.end));
+  const pct = (m) => `${Math.max(0, Math.min(100, (m / len) * 100)).toFixed(2)}%`;
+  const bar = el('div', 'wagen__bar');
+  for (const s of seq.sectors || []) {
+    const d = el('span', 'wagen__sector', s.name);
+    d.style.left = pct(s.start);
+    d.style.width = pct(s.end - s.start);
+    bar.append(d);
+  }
+  for (const v of seq.vehicles) {
+    const cls = ['wagen__car'];
+    if (v.loco) cls.push('is-loco');
+    else if (v.first && !v.second) cls.push('is-first');
+    else if (v.first) cls.push('is-mixed');
+    if (v.dining) cls.push('is-dining');
+    if (v.closed) cls.push('is-closed');
+    const c = el('span', cls.join(' '), v.loco ? '' : v.n);
+    c.style.left = pct(v.start);
+    c.style.width = pct(v.end - v.start);
+    c.title = v.loco ? 'Triebkopf / Lok'
+      : [`Wagen ${v.n}`, v.first && v.second ? '1./2. Klasse' : v.first ? '1. Klasse' : '2. Klasse',
+        v.dining ? 'Bordrestaurant' : null, v.bike ? 'Fahrradstellplätze' : null,
+        v.wheelchair ? 'Rollstuhlplatz' : null, v.closed ? 'geschlossen' : null,
+        v.sector ? `Sektor ${v.sector}` : null].filter(Boolean).join(' · ');
+    bar.append(c);
+  }
+  box.append(bar);
+
+  const sek = (pred) => sectorRange(seq.vehicles.filter(pred).map((v) => v.sector), seq.sectors);
+  const teile = [];
+  const erste = sek((v) => v.first);
+  if (erste) teile.push(`1. Klasse: Sektor ${erste}`);
+  const bistro = sek((v) => v.dining);
+  if (bistro) teile.push(`Bordrestaurant: ${bistro}`);
+  const rad = sek((v) => v.bike);
+  if (rad) teile.push(`Fahrräder: ${rad}`);
+
+  // Zugteilung: verschiedene Ziele in einem Zug.
+  const ziele = [...new Set((seq.trains || []).map((t) => t.destination).filter(Boolean))];
+  if (ziele.length > 1) {
+    const je = seq.trains.map((t, gi) => {
+      const r = sek((v) => v.group === gi);
+      return r ? `${t.destination} Sektor ${r}` : null;
+    }).filter(Boolean);
+    box.append(el('p', 'wagen__split', `Zug wird geteilt — ${je.join(', ')}. Im richtigen Teil einsteigen.`));
+  }
+  if (teile.length) box.append(el('p', 'wagen__note', teile.join(' · ')));
   return box;
 }
 

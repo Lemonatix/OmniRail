@@ -1795,6 +1795,27 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   font-weight: 500;
 }
 
+/* Fahrgastrechte: kein Alarm, sondern eine gute Nachricht in schlechter
+   Lage - deshalb grün, nicht bernsteinfarben. */
+.live__rights {
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-left: 3px solid var(--green);
+  border-radius: var(--radius-sm);
+  background: var(--green-soft);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.live__rights strong { font-family: var(--font-mono); font-size: 0.78rem; color: var(--green); }
+.live__rights-text { margin: 0.3rem 0 0; }
+.live__rights-links { margin: 0.35rem 0 0; font-family: var(--font-mono); font-size: 0.74rem; }
+.live__rights-links a { color: var(--green); }
+
+/* Live verfolgen und Rückfahrt nebeneinander. */
+.card-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.card-actions .live-btn { align-self: auto; }
+
 /* Panel unter der Karte. */
 .live {
   margin-top: 0.6rem;
@@ -2710,6 +2731,70 @@ details.live__msg .live__msg-text {
 .xfer__legend-item { display: inline-flex; align-items: center; gap: 0.3rem; }
 .xfer__legend-sym { color: var(--purple); font-weight: 700; }
 .xfer__legend-note { flex-basis: 100%; }
+
+/* --- Wagenreihung im Umstiegsplan ------------------------------------ */
+
+.wagen:empty { display: none; }
+.wagen { margin-top: 0.7rem; }
+
+.wagen__title {
+  margin: 0 0 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.wagen__zug + .wagen__zug { margin-top: 0.6rem; }
+.wagen__head { margin: 0 0 0.25rem; font-size: 0.8rem; font-weight: 500; color: var(--text); }
+
+/* Maßstäblich: oben die Sektoren des Bahnsteigs, darunter die Wagen. */
+.wagen__bar {
+  position: relative;
+  height: 40px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+
+.wagen__sector {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-left: 1px dashed var(--border-strong);
+  padding-left: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 14px;
+  color: var(--text-muted);
+}
+
+.wagen__car {
+  position: absolute;
+  bottom: 3px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface-solid);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  line-height: 18px;
+  text-align: center;
+  color: var(--text-dim);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.wagen__car.is-first { background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
+.wagen__car.is-mixed { background: linear-gradient(90deg, var(--amber-soft) 50%, var(--surface-solid) 50%); }
+.wagen__car.is-dining { border-color: var(--green); box-shadow: inset 0 -3px 0 var(--green); }
+.wagen__car.is-loco { background: var(--text-muted); border-color: var(--text-muted); }
+.wagen__car.is-closed { opacity: 0.35; }
+
+.wagen__note, .wagen__split { margin: 0.25rem 0 0; font-size: 0.74rem; color: var(--text-muted); }
+.wagen__split { color: var(--rose); font-weight: 500; }
+.wagen__source { margin: 0.4rem 0 0; font-size: 0.68rem; color: var(--text-muted); opacity: 0.85; }
 
 /* --- Ebenenumschalter ------------------------------------------------
    Unten links, gegenüber den Zoomknöpfen — wie in den Apps der Bahnen, wo

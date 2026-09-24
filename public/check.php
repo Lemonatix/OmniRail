@@ -135,34 +135,53 @@ if ($curlOk) {
     // ihr Ausfall war bisher unsichtbar, weil der Provider bei jedem Fehler
     // stillschweigend weitermacht. Genau deshalb steht sie hier.
     if (($config['providers']['wagenreihung']['enabled'] ?? false) === true) {
+        $wr   = $config['providers']['wagenreihung'];
+        $vonDb = ($wr['source'] ?? 'bahnde') === 'bahnde';
         $t0  = microtime(true);
-        $res = $http->getJson(
-            rtrim((string) $config['providers']['wagenreihung']['endpoint'], '/')
-                . '/coachSequence.departureSequence?input='
-                . rawurlencode(json_encode(json_encode([
-                    ['evaNumber' => 1, 'plannedDeparture' => 2, 'initialDeparture' => 3,
-                     'journeyNumber' => 4, 'category' => 5, 'administration' => 6],
-                    '8000105',
-                    ['Date', gmdate('Y-m-d\TH:i:s.000\Z')],
-                    ['Date', gmdate('Y-m-d\T00:00:00.000\Z')],
-                    1074, 'ICE', '80',
-                ]))),
-            ['Accept' => 'application/json', 'User-Agent' => 'train-maxxing/1.0 (privates Fahrplanwerkzeug)']
-        );
+        if ($vonDb) {
+            // Irgendein Zug genügt: 200 (Reihung da) und 404 (für diesen Zug
+            // gerade keine) heißen beide "Schnittstelle antwortet". Kaputt ist
+            // sie bei 403 (TLS-Profil) oder 422 (Parameterformat geändert).
+            $res = $http->withBrowserTls()->getJson(
+                rtrim((string) $wr['endpoint'], '/') . '?' . http_build_query([
+                    'administrationId' => '80', 'category' => 'ICE', 'date' => date('Y-m-d'),
+                    'evaNumber' => '8000105', 'number' => '1074', 'time' => gmdate('Y-m-d\TH:i:00.000\Z'),
+                ]),
+                // Ohne Accept-Language blockt bahn.de hier mit OPS_BLOCKED -
+                // nachgemessen, derselbe Aufruf mit dem Kopf geht durch.
+                ['Accept' => 'application/json', 'Accept-Language' => 'de-DE,de;q=0.9', 'Referer' => 'https://www.bahn.de/',
+                 'User-Agent' => 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36']
+            );
+            $ok = in_array($res['status'], [200, 404], true);
+        } else {
+            $res = $http->getJson(
+                rtrim((string) $wr['endpoint'], '/')
+                    . '/coachSequence.departureSequence?input='
+                    . rawurlencode(json_encode(json_encode([
+                        ['evaNumber' => 1, 'plannedDeparture' => 2, 'initialDeparture' => 3,
+                         'journeyNumber' => 4, 'category' => 5, 'administration' => 6],
+                        '8000105',
+                        ['Date', gmdate('Y-m-d\TH:i:s.000\Z')],
+                        ['Date', gmdate('Y-m-d\T00:00:00.000\Z')],
+                        1074, 'ICE', '80',
+                    ]))),
+                ['Accept' => 'application/json', 'User-Agent' => 'train-maxxing/1.0 (privates Fahrplanwerkzeug)']
+            );
+            $ok = $res['ok'] && $res['json'] !== null;
+        }
         $ms = (int) round((microtime(true) - $t0) * 1000);
-        $ok = $res['ok'] && $res['json'] !== null;
         $checks[] = [
-            'name'   => 'bahn.expert - Baureihe aus der Wagenreihung (optional)',
+            'name'   => ($vonDb ? 'bahn.de' : 'bahn.expert') . ' - Wagenreihung und Baureihe (optional)',
             'state'  => $ok ? 'ok' : 'warn',
             'detail' => $ok
                 ? 'erreichbar in ' . $ms . ' ms'
                 : 'HTTP ' . $res['status'] . ' - Schnittstelle antwortet nicht wie erwartet',
             'hint'   => $ok
-                ? 'Deutscher Fernverkehr am Reisetag wird mit der Baureihe angezeigt (ICE 4, ICE 3neo …).'
+                ? 'Deutscher Fernverkehr am Reisetag wird mit der Baureihe angezeigt (ICE 4, ICE 3neo …), '
+                  . 'und der Umstiegsplan zeigt, wo die Wagen am Bahnsteig halten.'
                 : 'Ohne diese Quelle bleibt es bei der Gattung; das Fahrzeug wird nur dort genannt, '
-                  . 'wo es sich aus der Gattung oder der Strecke zwingend ergibt (railjet, Nightjet, Giruno …). '
-                  . 'bahn.expert ist ein privates Projekt und ändert seine Schnittstelle gelegentlich - '
-                  . 'wer die Angabe braucht, wechselt auf RIS::Transports im DB API Marketplace.',
+                  . 'wo es sich aus der Gattung oder der Strecke zwingend ergibt (railjet, Nightjet, Giruno …), '
+                  . 'und der Wagenplan im Umstiegsplan fehlt. Die Stelle: lib/Providers/CoachSequence.php.',
         ];
     }
 }

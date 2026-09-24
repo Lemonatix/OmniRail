@@ -329,6 +329,21 @@ Ebene im Plan:
 Einen Laufweg zeichnet der Plan weiterhin nicht. Die Gänge zwischen den
 Treppen sind in OSM zu lückenhaft; siehe oben.
 
+#### Wagenreihung am Umstieg
+
+Unter dem Plan stehen beide Züge **maßstäblich am Bahnsteig**: oben die
+Sektoren, darunter die Wagen mit Nummer, die 1. Klasse bernsteinfarben, das
+Bordrestaurant grün unterstrichen. Darunter in Worten, was man beim
+Umsteigen wissen will — „1. Klasse: Sektor F–G · Bordrestaurant: F ·
+Fahrräder: A" — und, rot, wenn ein Zug **geteilt** wird: ein Flügelzug mit
+zwei Zielen ist die Falle, in die man sonst tappt. Quelle ist die
+Wagenreihung der DB (siehe „Der direkte DB-Weg"), also deutscher Fernverkehr
+am Reisetag. Nachgeprüft am Umstieg Mannheim Hbf, ICE 202 (Gleis 3) → ICE 692
+(Gleis 2).
+
+Was noch fehlt: die Sektoren auf der Karte selbst. Dafür müssten die
+Sektortafeln in OSM erfasst sein, und das sind sie nur an wenigen Bahnhöfen.
+
 **Die SBB kann mehr — aber nicht frei.** Die exakten Wege über mehrere Etagen
 in der SBB-App kommen aus der *Journey Maps*-API (`/v1/transfer`, „ROKAS
 enhanced pedestrian routing"; dazu `/v1/master-data/…/floor-connectors`).
@@ -967,6 +982,7 @@ immer „keine Echtzeitdaten". Jetzt gibt es drei Quellen
 | **HAFAS** (`jid`) | Fernverkehr, Regionalzug, S-Bahn | wie bisher |
 | **DB** (`dbJourneyId`) | alles mit DB-Fahrplan, also auch U-Bahn und Tram | `/web/api/reiseloesung/fahrt` — der Zuglauf-Endpunkt von bahn.de, Soll- und Ist-Zeit je Halt, rund 0,2 s |
 | **MVG** | Abschnitte aus der MVG-Suche (Stadtfahrt, Zubringer) | die Abfahrtstafel an Ein- und Ausstieg: die eigene Bahn über Linie und Planminute, am Ausstieg über dieselbe Fahrtnummer (`tripCode`) |
+| **opendata.ch** | Schweizer Abschnitte, wenn HAFAS nur den Fahrplan hat | die Prognose der SBB auf der Abfahrts- und Ankunftstafel von transport.opendata.ch, gefunden über Gattung, Planminute und Richtung (die Tafel nennt bei Fernzügen die Linie, nicht die Zugnummer). Ohne Schlüssel — aber der Dienst drosselt (`HTTP 429`); dann bleibt es beim Fahrplan |
 
 Die MVG meldet dabei nur Ein- und Ausstieg; die Halte dazwischen kommen aus
 der Verbindung und werden um die gemeldete Verspätung verschoben. So bleiben
@@ -987,6 +1003,48 @@ Dazu zwei Verbesserungen, die jeden Zug betreffen:
 Nachgeprüft: Sendlinger Tor → Hauptbahnhof (U2, DB-Fahrplan) zeigte die
 Ist-Zeiten je Halt; Odeonsplatz → Goetheplatz (U6, MVG) −1 min am Einstieg
 und am Ausstieg, wiedergefunden über die Fahrtnummer.
+
+#### Fahrgastrechte
+
+Sobald die Echtzeit eine Verspätung am Ziel erwarten lässt, steht unter der
+Warnung, was einem zusteht — grün, weil es in einer schlechten Lage die gute
+Nachricht ist. Nachgelesen bei DB und SBB:
+
+| erwartete Verspätung am Ziel | was gilt |
+|---|---|
+| ab 20 min, innerdeutsch | **Zugbindung aufgehoben** (DB): mit Sparpreis darf man einen anderen Zug nehmen |
+| ab 60 min, international | Zugbindung aufgehoben (DB) |
+| ab 60 min | **25 %** des Fahrpreises (EU und Schweiz) |
+| ab 120 min | **50 %** |
+
+Beträge unter 4 € (DB) bzw. 5 CHF (SBB) werden nicht ausgezahlt; das steht
+dabei, ebenso die Links zum Antrag bei DB, ÖBB oder SBB, je nachdem welche
+Länder die Reise berührt. Gemessen wird gegen die **ursprünglich gebuchte**
+Ankunft — nach einem Umdisponieren ist die Verbindung eine andere, der
+Anspruch hängt aber an der ersten. Mit Benachrichtigungen kommt beim
+Überschreiten von 60 und 120 Minuten je eine Meldung.
+
+Nachgeprüft an einem echten Fall: ICE 693 Frankfurt → München, +23 min am
+Ziel — der Kasten meldete die aufgehobene Zugbindung.
+
+#### Fahrt teilen
+
+„Teilen" in der Verfolgung legt die Fahrt auf dem eigenen Server ab
+(`POST ?action=share`) und liefert einen Link `?live=<Kennung>`. Wer ihn
+öffnet, sieht dieselbe Verfolgung — „Geteilt" statt „Live" —, und dessen
+Browser holt sich die Echtzeit selbst. Auf dem Telefon öffnet sich das
+Teilen-Menü mit einem Satz wie „Unterwegs nach München Hbf mit ICE 693,
+Ankunft 23:38 (+23 min)", sonst landet beides in der Zwischenablage.
+
+- Gespeichert wird **nur die Verbindung** (Züge, Halte, Zeiten, Verlauf) —
+  kein Standort, keine Kennung des Teilenden, keine Preise. Höchstens 400 kB.
+- Der Link hält bis **sechs Stunden nach der Ankunft**, höchstens drei Tage.
+  Ist die Fahrt schon angekommen, sagt die App das, statt eine leere
+  Verfolgung zu öffnen.
+- Eine geteilte Fahrt **überschreibt nicht** die eigene gespeicherte
+  Verfolgung des Empfängers.
+- Das Anlegen kostet im Rate-Limit 10 Punkte — jeder Aufruf schreibt eine
+  Datei.
 
 #### Die gelben Kästen sind kurz
 
@@ -1336,6 +1394,10 @@ Zwei Lehren, beide eingebaut:
   Angabe verlässlich braucht, wechselt auf **RIS::Transports** im DB API
   Marketplace — dieselben Daten unter Vertrag und mit Schlüssel.
 
+Und er wanderte wieder (September 2026, `/api/trpc` → wieder `HTTP 500`).
+Seitdem kommt die Wagenreihung direkt von bahn.de — siehe „Der direkte
+DB-Weg: jetzt offen".
+
 #### Die Abfragen laufen gleichzeitig
 
 Die Wagenreihung braucht **eine Anfrage je Zug**. Sechs Trefferkarten mit je
@@ -1386,26 +1448,48 @@ wechseln: Das Modul `RIS::Transports` liefert dieselben Daten offiziell, unter
 Vertrag und mit API-Key. Dann tauscht du in `CoachSequence.php` nur `url()`
 und `parse()` aus.
 
-### Der direkte DB-Weg: weiterhin verschlossen
+### Der direkte DB-Weg: jetzt offen
 
-Die Baureihe aus der Wagenreihung zu holen, ist bisher **nicht gelungen**. Was
-geprüft wurde:
+Lange stand hier, der Wagenreihungs-Endpunkt der DB antworte auf jede von
+außen gebaute Anfrage mit **HTTP 422**. Im September 2026 fiel bahn.expert
+erneut aus — `/api/trpc` antwortete wie zuvor `/rpc` mit `HTTP 500 "Only
+HTML requests are supported here"`, und die Baureihe fehlte wieder überall.
+Beim zweiten Anlauf ging der direkte Weg:
 
-| Weg | Ergebnis |
+```
+GET https://www.bahn.de/web/api/reisebegleitung/wagenreihung/vehicle-sequence
+    ?administrationId=80&category=ICE&date=2026-09-24
+    &evaNumber=8000261&number=1211&time=2026-09-24T06:03:00.000Z
+```
+
+- **`time` in UTC mit Millisekunden**, `date` als Reisetag in Ortszeit.
+- **Browser-TLS-Profil** wie die übrige DB-Anbindung, und zusätzlich der
+  Kopf **`Accept-Language`** — ohne ihn kommt `403 OPS_BLOCKED`, mit ihm
+  dieselbe Anfrage mit 200. Nachgemessen, beide Varianten nebeneinander.
+- `time` darf **ein paar Minuten danebenliegen** (±8 min gingen) — für den
+  ankommenden Zug am Umsteigebahnhof genügt deshalb seine Ankunftszeit.
+- 8 von 9 Stichproben lieferten eine Reihung, der neunte `404` (für diesen
+  Zug gerade keine).
+
+Die Antwort ist reicher als die von bahn.expert: der Bahnsteig mit seinen
+**Sektoren in Metern**, und jeder Wagen mit Nummer, Klasse, Sektor, Lage am
+Bahnsteig und Bauart. Die Baureihe ergibt sich aus der Bauart
+(`CoachSequence::seriesFromVehicles()`), in zwei Schreibweisen, beide
+nachgesehen:
+
+| Bauart | Baureihe |
 |---|---|
-| `bahn.de/web/api/reisebegleitung/wagenreihung/vehicle-sequence` | **HTTP 422** bei acht Parametervarianten — mit und ohne Zeitzone, Sekunden, Session-Cookies, `administrationId` 80/1080, `date` vs. `departure`. Getestet mit einem real fahrenden ICE. |
-| JS-Bundles von bahn.de nach dem echten Aufruf durchsucht | `vehicle-sequence` kommt in den geladenen Bundles nicht vor; der Code liegt in einem Chunk, der sich nicht auffinden ließ |
-| `ist-wr.noncd.db.de` (der alte Endpunkt) | kein DNS-Eintrag mehr, abgeschaltet |
-| HAFAS `JourneyDetails` mit `getTrainComposition`, Methoden `TrainComposition`/`TrainFormation` | keine Wagenfelder bzw. Methode existiert nicht |
+| `I4010` Triebkopf | ICE 1 (401) |
+| `I4080` … `I4088` | ICE 3neo (408) |
+| `I4110` … `I4118` | ICE T (411) |
+| `I0812`, `I1412`, `I9812` … | ICE 4 (412/812) — Wagen vorn, Baureihe hinten |
+| `R89xx` mit Lok | ICE L |
+| `B11`, `WR6` (Schweizer Wagen im EC) | keine |
 
-Der Endpunkt **existiert** (422 statt 404), aber die Parameterkombination ließ
-sich nicht ermitteln. Da bahn.expert dieselben Daten liefert, ist das kein
-Problem mehr — der Abschnitt steht hier nur, damit niemand denselben Weg noch
-einmal geht.
-
-Für Fahrten in der Zukunft gibt es ohnehin keine Wagenreihung. Dafür sind die
-„immer erkennbaren" Modelle (railjet, Nightjet, WESTbahn, TGV) und die
-Gattungsbewertung da.
+bahn.expert bleibt als Quelle wählbar (`wagenreihung.source` in
+`config.php`). Für Fahrten in der Zukunft gibt es weiterhin keine
+Wagenreihung — dafür sind die „immer erkennbaren" Modelle (railjet,
+Nightjet, WESTbahn, TGV) und die Gattungsbewertung da.
 
 ### Karte
 
@@ -2000,6 +2084,15 @@ schrumpfen mit. Unter 360 px bekommt das Datum eine eigene Zeile — 360 und
 nicht 380, weil die verbreiteten Telefongrössen bei 375 und 390 px liegen und
 dort beide Felder bequem nebeneinander passen.
 
+### Rückfahrt
+
+Jede Verbindung hat neben „Live verfolgen" einen Knopf **„Rückfahrt"**: Start
+und Ziel getauscht, gesucht ab einer Stunde nach der Ankunft, auf fünf
+Minuten aufgerundet. Getauscht werden die Orte der Suche, nicht die der
+Verbindung — die endet vielleicht in „München Hbf (tief)" oder an einem
+MVG-Halt. Unter der Suche steht, womit gerechnet wurde; die Uhrzeit oben ist
+ein Tipp entfernt.
+
 ### Teilen
 
 Der Knopf **„Suche teilen"** legt die komplette Suche in der Adresszeile ab —
@@ -2261,7 +2354,8 @@ public/
             ├── OebbHafas.php     Fahrplan, Zuggattungen, Ländercodes, Geometrie, Tafel
             ├── DbVendo.php       Echtpreise, alle Tarife, Auslastung, Ausstattung
             ├── Mvg.php           Münchner Nahverkehr: Orte, Verbindungen, Abfahrten
-            └── CoachSequence.php Baureihe über bahn.expert
+            ├── SwissOpenData.php Schweizer Prognosen (transport.opendata.ch)
+            └── CoachSequence.php Wagenreihung und Baureihe (bahn.de)
 ```
 
 ### API-Endpunkte
@@ -2275,12 +2369,15 @@ Alles per GET auf `api/`:
 | `?action=locations&q=Bern` | Stationssuche |
 | `?action=journeys&from=…&to=…&date=…&time=…` | Verbindungen inklusive Preis (`&scroll=…` blättert; der Kontext trägt seine Richtung selbst — `scroll` aus der Antwort führt zu späteren, `scrollBack` zu früheren Abfahrten) |
 | `?action=livetrains&bbox=süd,west,nord,ost` | Züge, die dort gerade fahren |
-| `?action=traindetails&jid=…` | Zuglauf mit Halten und Verspätung — statt `jid` auch `db=<journeyId>` (Zuglauf bei der DB) oder `mvgFrom`, `mvgTo`, `line`, `dep`, `arr` (Echtzeit eines MVG-Abschnitts) |
+| `?action=traindetails&jid=…` | Zuglauf mit Halten und Verspätung — statt `jid` auch `db=<journeyId>` (Zuglauf bei der DB) oder `mvgFrom`, `mvgTo`, `line`, `dep`, `arr` (Echtzeit eines MVG-Abschnitts) oder `chFrom`, `chTo`, `cat`, `dir`, `dep`, `arr` (Schweizer Prognose über opendata.ch) |
 | `?action=bestprices&from=…&to=…&date=…` | Günstigste Zeitfenster am Tag |
 | `?action=nextconnection&from=…&to=…&date=…&time=…` | Nächster Anschluss nach einem knappen Umstieg oder Ausfall (mit Echtzeit) |
 | `?action=localroute&fromLat=…&fromLon=…&toLat=…&toLon=…&date=…&time=…` | Ersatzweg im MVV über die MVG |
 | `?action=offers&ctx=…&class=…&discounts=…` | Alle DB-Tarife einer Verbindung (`ctx` = `dbRecon` der Verbindung) |
 | `?action=departures&station=…&type=dep\|arr&date=…&time=…` | Abfahrts- bzw. Ankunftstafel; `lat`/`lon` helfen, in München die MVG-Halte zu finden |
+| `?action=sequence&eva=…&cat=…&num=…&time=…` | Wagenreihung eines Zuges an einem Bahnhof: Sektoren, Wagen, Klassen |
+| `POST ?action=share` | Verfolgte Fahrt zum Teilen ablegen (JSON `{"journey": …}`), liefert `id` |
+| `?action=shared&id=…` | Geteilte Fahrt abholen |
 | `?action=fxrate` | EZB-Tageskurse, für den Gegenwert in Franken |
 | `?action=platforms&lat=…&lon=…&from=…&to=…` | Bahnsteige, Treppen, Rolltreppen und Aufzüge eines Bahnhofs aus OpenStreetMap (`from`/`to` = die beiden Gleise des Umstiegs) |
 | `?action=works` | Bauarbeiten im Netz, mit Abschnitt und Zeitraum |
@@ -2303,7 +2400,11 @@ php bin/test_providers.php     # Übersetzung der HAFAS-, DB- und MVG-Antworten
 ```
 
 Alle drei brauchen nichts ausser Node bzw. PHP — kein Paket, kein Netz,
-keine Datenbank. Sie laufen in unter einer Sekunde.
+keine Datenbank. Sie laufen in unter einer Sekunde — und deshalb bei jedem
+Push und Pull Request auf GitHub (`.github/workflows/tests.yml`, dazu
+`php -l` und `node --check` über alle Dateien). Ändert ein Dienst sein
+Format oder fehlt irgendwo ein Import, steht es damit am Commit, nicht erst
+im Zug.
 
 **`test_providers.php` prüft gegen echte, gekürzte Antworten** der Dienste
 (`bin/fixtures/`, aufgezeichnet 2026-09): ob eine MVG-U-Bahn „U5" heißt und
@@ -2531,5 +2632,9 @@ Für den privaten Gebrauch ist das üblich und verbreitet — aber:
   Rolltreppen und Aufzüge je Ebene. Exakte Wege wie in der SBB-App gibt es
   nur mit freigeschaltetem Zugang zur Journey-Maps-API und nur in der
   Schweiz.
+- **Schweizer Echtzeit** kommt nur als Rückfallebene über
+  transport.opendata.ch, und der Dienst drosselt (`HTTP 429`). Die Zuordnung
+  zum Zug geht über Gattung, Minute und Richtung, nicht über die Zugnummer.
+- **Wagenreihung** nur für deutschen Fernverkehr am Reisetag.
 - **Die MVG-Abfahrten reichen nur ab jetzt** bis einen Tag voraus; für eine
   Tafel nächste Woche gibt es in München nur HAFAS, also keine U-Bahn.

@@ -27,6 +27,9 @@ require $lib . '/Providers/DbVendo.php';
 require $lib . '/Providers/Mvg.php';
 require $lib . '/CityTrips.php';
 require $lib . '/Providers/Overpass.php';
+require $lib . '/Cache.php';
+require $lib . '/Providers/CoachSequence.php';
+require $lib . '/Providers/SwissOpenData.php';
 
 $gesamt = 0;
 $fehler = 0;
@@ -239,6 +242,41 @@ pruefe('Rolltreppe mit Richtung, Anfang und Ende',
 pruefe('Treppe ohne Ebene bleibt draußen (Straßenraum)',
     privat(Overpass::class, 'connector', ['type' => 'way', 'tags' => ['highway' => 'steps'],
         'geometry' => [['lat' => 1, 'lon' => 1], ['lat' => 2, 'lon' => 2]]]), null);
+
+// ---------------------------------------------------------------------
+echo "\nDB - Wagenreihung (ICE 1211, München Hbf Gleis 12)\n";
+
+$wr  = fixture('db_wagenreihung.json');
+$seq = CoachSequence::mapSequence($wr);
+pruefe('Bahnsteig mit Sektoren A–G', [$seq['platform'], array_column($seq['sectors'], 'name')],
+    ['12', ['A', 'B', 'C', 'D', 'E', 'F', 'G']]);
+pruefe('zwei Zugteile, 14 Wagen', [count($seq['trains']), count($seq['vehicles'])], [2, 14]);
+pruefe('Wagen mit Nummer, Sektor und Lage in Metern',
+    [$seq['vehicles'][0]['n'], $seq['vehicles'][0]['sector'], $seq['vehicles'][0]['start']], ['21', 'G', 361.8]);
+pruefe('Baureihe aus der Bauart "I4115": ICE T', CoachSequence::seriesFromVehicles($wr, 'ICE'),
+    ['series' => '411', 'seriesName' => 'ICE T (BR 411)']);
+pruefe('ICE 4 schreibt die Baureihe hinten ("I1412")', CoachSequence::seriesFromVehicles(
+    ['groups' => [['vehicles' => [['type' => ['constructionType' => 'I0812']], ['type' => ['constructionType' => 'I1412']]]]]], 'ICE'),
+    ['series' => '412', 'seriesName' => 'ICE 4 (BR 412)']);
+pruefe('Schweizer Wagen ("B11") haben keine DB-Baureihe', CoachSequence::seriesFromVehicles(
+    ['groups' => [['vehicles' => [['type' => ['constructionType' => 'B11']]]]]], 'EC'), null);
+
+// ---------------------------------------------------------------------
+echo "\nSchweiz - eigenen Zug auf der Tafel finden\n";
+
+$tafel = [
+    ['category' => 'S', 'number' => '12', 'to' => 'Winterthur', 'stop' => ['departure' => '2026-09-24T09:02:00+0200']],
+    ['category' => 'IR', 'number' => '37', 'to' => 'Basel SBB', 'stop' => ['departure' => '2026-09-24T09:02:00+0200',
+        'prognosis' => ['departure' => '2026-09-24T09:06:00+0200', 'platform' => '14']]],
+    ['category' => 'IR', 'number' => '36', 'to' => 'Chur', 'stop' => ['departure' => '2026-09-24T09:02:00+0200']],
+];
+$plan = strtotime('2026-09-24T09:02:00+02:00');
+pruefe('gleiche Minute, Gattung und Richtung entscheiden',
+    SwissOpenData::find($tafel, 'departure', $plan, 'IR', 'Basel SBB')['number'] ?? null, '37');
+pruefe('Richtung mit Klammerzusatz ("Chur (GR)")',
+    SwissOpenData::find($tafel, 'departure', $plan, 'IR', 'Chur (GR)')['number'] ?? null, '36');
+pruefe('andere Minute: kein Treffer',
+    SwissOpenData::find($tafel, 'departure', $plan + 300, 'IR', ''), null);
 
 // ---------------------------------------------------------------------
 echo "\nText - Fremdtexte als Klartext\n";
