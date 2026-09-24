@@ -28,7 +28,7 @@
 import { api } from './api.js';
 // sameTrain war benutzt, aber nie importiert — siehe trainPosition().
 import { geometryOf, trainLabel, sameTrain, snapToLine } from './map.js';
-import { spliceJourney } from './scoring.js';
+import { spliceJourney, bridgeOption, mergeAlternatives } from './scoring.js';
 import { typeOf } from './data/trains.js';
 
 const REFRESH_MS = 30_000;
@@ -44,6 +44,63 @@ const SAFE_TRANSFER_MIN = 2;
 
 /** Nur solange die Verbindung noch läuft, ist Auffrischen sinnvoll. */
 const STALE_AFTER_ARRIVAL_MS = 15 * 60_000;
+
+/** Ob Benachrichtigungen gewünscht sind - gilt über die einzelne Fahrt hinaus. */
+const NOTIFY_KEY = 'train-maxxing:notify';
+
+/**
+ * Ab welcher Verspätung eine Benachrichtigung kommt, und in welchen Stufen.
+ *
+ * Jede Minute zu melden wäre Lärm: bei einer Verspätung, die langsam
+ * anwächst, klingelte das Telefon im Halbminutentakt. Gemeldet wird deshalb
+ * erst ab fünf Minuten und danach nur, wenn die nächste Fünferstufe
+ * erreicht ist.
+ */
+const DELAY_STEP_MIN = 5;
+
+/**
+ * Wie viele Alternativen sofort dastehen. Der Rest ist einen Tipp entfernt -
+ * vier Vorschläge mit je drei Zeilen füllten auf dem Telefon den ganzen
+ * Bildschirm, bevor man überhaupt sah, welcher Zug betroffen ist.
+ */
+const OPTIONS_VISIBLE = 2;
+
+function readNotifyPref() {
+  try { return localStorage.getItem(NOTIFY_KEY) === '1'; } catch { return false; }
+}
+
+function writeNotifyPref(on) {
+  try { localStorage.setItem(NOTIFY_KEY, on ? '1' : '0'); } catch { /* privat */ }
+}
+
+/**
+ * Eine Meldung, zugeklappt auf ihre Überschrift.
+ *
+ * DIE GELBEN KÄSTEN WAREN ZU LANG. Die MVG schickt zu jeder Störung einen
+ * Fließtext mit - Ursache, betroffene Halte, Ersatzverkehr, Umleitungen,
+ * oft mehrere Absätze. Der stand vollständig in der Verfolgung, und auf dem
+ * Telefon schob eine einzige Meldung die Zugabschnitte aus dem Bild. Jetzt
+ * steht nur die Überschrift da (höchstens zwei Zeilen); der Rest ist einen
+ * Tipp entfernt.
+ *
+ * @param {string} cls    CSS-Klasse des Kastens
+ * @param {string} title  immer sichtbar
+ * @param {string} [body] aufklappbar
+ */
+function messageBox(cls, title, body) {
+  const text = (body || '').trim();
+  if (!text || text === title) {
+    const p = el('p', cls);
+    p.append(el('span', 'live__msg-title', title));
+    return p;
+  }
+  const box = el('details', `${cls} live__msg--more`);
+  const sum = el('summary', null);
+  sum.append(el('span', 'live__msg-title', title));
+  box.append(sum);
+  box.append(el('p', 'live__msg-text', text));
+  return box;
+}
 
 const el = (tag, className, text) => {
   const n = document.createElement(tag);
@@ -102,14 +159,33 @@ export class LiveTracker {
     /** Wird mit der verfolgten Verbindung gerufen, damit sie gesichert werden kann. */
     this.onJourneyChange = null;
 
+    /** Benachrichtigungen bei Ausfall, Verspätung, Gleiswechsel. */
+    this.notify = readNotifyPref() && LiveTracker.canNotify()
+      && Notification.permission === 'granted';
+    /** Was schon gemeldet wurde: Schlüssel -> Stufe. Siehe checkAlerts(). */
+    this.alerted = new Map();
+    /** Der erste Stand einer Verfolgung wird nur notiert, nicht gemeldet. */
+    this.alertBaseline = true;
+
     // Beim Wegschalten des Tabs nicht weiter pollen - das spart Akku und
     // schont die Quelle. Beim Zurückkommen sofort auffrischen.
+    //
+    // AUSSER BEI BENACHRICHTIGUNGEN: die sind ja gerade für den Fall da, in
+    // dem man nicht hinschaut. Dann läuft das Auffrischen im Hintergrund
+    // weiter, so gut der Browser es lässt - Chrome drosselt Zeitgeber in
+    // Hintergrund-Tabs auf einmal pro Minute, und ein Telefon mit dunklem
+    // Bildschirm friert die Seite irgendwann ganz ein. Siehe README.
     this._onVisible = () => {
       if (!this.journey) return;
-      if (document.hidden) this.stopTimer();
+      if (document.hidden) { if (!this.notify) this.stopTimer(); }
       else { this.refresh(); this.startTimer(); }
     };
     document.addEventListener('visibilitychange', this._onVisible);
+  }
+
+  /** Kann dieser Browser überhaupt benachrichtigen? */
+  static canNotify() {
+    return typeof window !== 'undefined' && 'Notification' in window && window.isSecureContext;
   }
 
   /**
@@ -140,18 +216,96 @@ export class LiveTracker {
     return (journey.legs || []).filter((l) => l.mode === 'train');
   }
 
+  /**
+   * Woher kommt die Echtzeit für diesen Abschnitt?
+   *
+   * DREI QUELLEN, in dieser Reihenfolge:
+   *   hafas - der Zuglauf über die jid; Fernverkehr, Regionalzug, S-Bahn.
+   *   db    - der Zuglauf bei der DB (`dbJourneyId`). Kommt der Fahrplan von
+   *           der DB, ist das die einzige Kennung - in München bei U-Bahn,
+   *           Tram und Bus der Normalfall.
+   *   mvg   - für Abschnitte aus der MVG-Verbindungssuche: die Abfahrtstafel
+   *           an Ein- und Ausstieg, siehe Mvg::trip().
+   * Vorher kannte die Verfolgung nur die erste. Eine U-Bahn stand deshalb
+   * immer mit "keine Echtzeitdaten" da.
+   */
+  static sourceOf(leg) {
+    if (leg.jid) return 'hafas';
+    if (leg.dbJourneyId) return 'db';
+    const mvg = (id) => String(id || '').startsWith('mvg:');
+    if (mvg(leg.from?.id) && mvg(leg.to?.id) && leg.line) return 'mvg';
+    return null;
+  }
+
+  /** Den Zuglauf eines Abschnitts aus seiner Quelle holen. */
+  static async fetchRun(entry) {
+    const leg = entry.leg;
+    if (entry.src === 'hafas') {
+      const res = await api.trainDetails(entry.jid);
+      // Die Münchner S-Bahn kennt HAFAS oft nur nach Fahrplan. Hat die DB
+      // für denselben Zug Ist-Zeiten, gelten die.
+      if (!res.train?.hasRealtime && leg.dbJourneyId) {
+        try {
+          const db = await api.trainRun({ db: leg.dbJourneyId });
+          if (db.train?.hasRealtime) return db;
+        } catch { /* dann eben der Fahrplan von HAFAS */ }
+      }
+      return res;
+    }
+    if (entry.src === 'db') return api.trainRun({ db: leg.dbJourneyId });
+
+    const res = await api.trainRun({
+      mvgFrom: String(leg.from.id).slice(4), mvgTo: String(leg.to.id).slice(4),
+      line: leg.line, dep: leg.departure, arr: leg.arrival,
+      fromName: leg.from.name, toName: leg.to.name,
+    });
+    // Die MVG meldet nur Ein- und Ausstieg. Die Halte dazwischen kommen aus
+    // der Verbindung, verschoben um die gemeldete Verspätung - so bleiben
+    // Halteliste und Zugposition auf der Karte vollständig.
+    res.train = { ...res.train, stops: LiveTracker.mergeStops(leg.stops || [], res.train) };
+    return res;
+  }
+
+  /**
+   * Halte einer MVG-Verbindung mit den Ist-Zeiten von Ein- und Ausstieg.
+   *
+   * @param {object[]} stops  Halte aus der Suche
+   * @param {object} run      Antwort von Mvg::trip()
+   */
+  static mergeStops(stops, run) {
+    const [ein, aus] = run?.stops || [];
+    const delay = Number.isFinite(run?.delay) ? run.delay : null;
+    const shift = (iso) => (iso && delay !== null
+      ? new Date(Date.parse(iso) + delay * 60000).toISOString() : null);
+    const last = stops.length - 1;
+    return stops.map((s, i) => {
+      if (i === 0 && ein) {
+        return { ...s, departureReal: ein.departureReal ?? null, platform: ein.platform ?? s.platform, cancelled: ein.cancelled };
+      }
+      if (i === last && aus) {
+        return { ...s, arrivalReal: aus.arrivalReal ?? null, platform: aus.platform ?? s.platform, cancelled: aus.cancelled };
+      }
+      return run?.hasRealtime
+        ? { ...s, departureReal: shift(s.departure), arrivalReal: shift(s.arrival) }
+        : s;
+    });
+  }
+
   start(journey) {
     if (this.isTracking(journey)) { this.stop(); return; }
 
     this.stopGps();
     this.journey = journey;
-    this.legs = LiveTracker.trackableLegs(journey).map((leg) => ({ leg, jid: leg.jid, data: null }));
+    this.legs = LiveTracker.trackableLegs(journey)
+      .map((leg) => ({ leg, jid: leg.jid, src: LiveTracker.sourceOf(leg), data: null }));
     this.messages = [];
     this.risk = null;
     this.options = [];
     this.optionsFor = null;
     this.updatedAt = null;
     this.error = null;
+    this.alerted = new Map();
+    this.alertBaseline = true;
     this.panel.hidden = false;
 
     // Route sofort zeichnen, ohne auf die Echtzeitdaten zu warten.
@@ -215,7 +369,7 @@ export class LiveTracker {
     // Nur Abschnitte mit Kennung lassen sich nachladen. Die übrigen bleiben
     // bei dem, was die Suche mitgeliefert hat - das ist bei DB-Fahrplänen
     // immerhin die Ist-Zeit, siehe renderLeg().
-    const nachladbar = this.legs.filter((e) => e.jid);
+    const nachladbar = this.legs.filter((e) => e.src);
     let fehler = 0;
     let ersterFehler = null;
 
@@ -226,8 +380,10 @@ export class LiveTracker {
     // nachgemessen 0,3 s für den einen Abschnitt und 6,8 s für den anderen.
     // Man sah also sieben Sekunden lang "lädt …", obwohl die Hälfte längst
     // dastand.
-    const offen = nachladbar.map((entry) => api.trainDetails(entry.jid).then(
+    let ausCache = false;
+    const offen = nachladbar.map((entry) => LiveTracker.fetchRun(entry).then(
       (res) => {
+        if (res.fromCache) ausCache = true;
         entry.data = res.train;
         if (!this.journey) return;
         this.risk = this.assessRisk();
@@ -249,10 +405,16 @@ export class LiveTracker {
       : null;
 
     this.risk = this.assessRisk();
-    this.updatedAt = new Date();
+    // OFFLINE: Der Service Worker hat den letzten Stand geliefert, oder es
+    // ging gar nichts. Dann bleibt die Uhrzeit des letzten echten Standes
+    // stehen - "Stand 14:32" soll nicht behaupten, es sei 14:32 frisch.
+    this.offline = ausCache || !navigator.onLine;
+    if (!this.offline) this.updatedAt = new Date();
+    if (this.offline && this.error) this.error = null; // der Hinweis steht im Kopf
     this.loading = false;
     this.pushToMap();
     this.render();
+    this.checkAlerts();
 
     // BEIWERK NACHREICHEN, ohne die Anzeige aufzuhalten.
     //
@@ -281,9 +443,11 @@ export class LiveTracker {
    * abgeglichen.
    */
   async loadMvgMessages() {
-    const inMunich = (this.journey.legs || []).some((leg) =>
-      (leg.stops || []).some((s) => /münchen|munchen/i.test(s.name || ''))
-    );
+    // Die MVG nennt ihre Halte ohne Ort ("Odeonsplatz") - eine Verbindung
+    // von der MVG liegt aber ohnehin in München.
+    const inMunich = String(this.journey.source || '').includes('mvg')
+      || (this.journey.legs || []).some((leg) =>
+        leg.operator === 'MVG' || (leg.stops || []).some((s) => /münchen|munchen/i.test(s.name || '')));
     if (!inMunich) { this.messages = []; return; }
 
     const MVG_TYPES = ['S', 'U', 'Tram', 'Bus'];
@@ -310,6 +474,194 @@ export class LiveTracker {
     } catch {
       this.messages = []; // Beiwerk - Fehler bleiben still.
     }
+  }
+
+  // -------------------------------------------------------------------
+  // Benachrichtigungen
+  // -------------------------------------------------------------------
+
+  async toggleNotify() {
+    if (this.notify) {
+      this.notify = false;
+      writeNotifyPref(false);
+      this.render();
+      return;
+    }
+    if (!LiveTracker.canNotify()) {
+      this.error = 'Dieser Browser kann nicht benachrichtigen (oder die Seite läuft nicht über HTTPS).';
+      this.render();
+      return;
+    }
+    let perm = Notification.permission;
+    if (perm === 'default') {
+      try { perm = await Notification.requestPermission(); } catch { perm = 'denied'; }
+    }
+    if (perm !== 'granted') {
+      this.error = 'Benachrichtigungen sind für diese Seite blockiert — freigeben lässt es sich in den Seiteneinstellungen des Browsers.';
+      this.render();
+      return;
+    }
+    this.notify = true;
+    this.error = null;
+    writeNotifyPref(true);
+    // Was jetzt schon ist, hat man eben gesehen - gemeldet wird ab hier.
+    this.collectAlerts().forEach((a) => this.alerted.set(a.key, a.level));
+    this.alertBaseline = false;
+    this.render();
+  }
+
+  /**
+   * Was ist gerade meldenswert?
+   *
+   * Drei Dinge, und alle drei betreffen nur, was noch VOR einem liegt:
+   * ein Ausfall oder geplatzter Anschluss (die Anschlusswache), eine
+   * Verspätung ab fünf Minuten in Fünferstufen, und ein Gleiswechsel an
+   * einem Einstieg. Jede Meldung trägt einen Schlüssel und eine Stufe;
+   * gemeldet wird nur, was neu ist oder eine höhere Stufe erreicht.
+   *
+   * @returns {{key:string, level:number, title:string, body:string}[]}
+   */
+  collectAlerts() {
+    const out = [];
+    const now = Date.now();
+
+    const r = this.risk;
+    if (r && r.status !== 'ok') {
+      out.push({
+        key: `risk|${r.key}`,
+        level: { risky: 1, missed: 2, cancelled: 3 }[r.status] || 1,
+        title: { cancelled: 'Zug fällt aus', missed: 'Anschluss weg' }[r.status] || 'Anschluss wird knapp',
+        body: this.riskText(r),
+      });
+    }
+
+    this.legs.forEach((entry, i) => {
+      const an = Date.parse(entry.leg.arrivalReal || entry.leg.arrival || '');
+      if (Number.isFinite(an) && an < now) return; // liegt hinter einem
+      if (LiveTracker.isCancelled(entry)) return;   // steht schon als Ausfall da
+      const label = trainLabel(entry.leg);
+
+      const delay = LiveTracker.liveDelay(entry);
+      if (delay >= DELAY_STEP_MIN) {
+        const stufe = Math.floor(delay / DELAY_STEP_MIN) * DELAY_STEP_MIN;
+        const ankunft = LiveTracker.legTime(entry, 'arrival');
+        out.push({
+          key: `delay|${i}|${entry.leg.from?.id}|${entry.leg.trainNumber || label}`,
+          level: stufe,
+          title: `${label}: +${delay} min`,
+          body: ankunft
+            ? `Ankunft ${entry.leg.to?.name} jetzt ${fmtTime(new Date(ankunft.at).toISOString())}.`
+            : `${label} ist ${delay} Minuten verspätet.`,
+        });
+      }
+
+      const gleis = LiveTracker.platformChange(entry);
+      if (gleis) {
+        out.push({
+          key: `gleis|${i}|${entry.leg.from?.id}|${gleis.now}`,
+          level: 1,
+          title: `Gleiswechsel: ${label}`,
+          body: `In ${entry.leg.from?.name} jetzt Gleis ${gleis.now} statt ${gleis.planned}.`,
+        });
+      }
+    });
+    return out;
+  }
+
+  /**
+   * Neues melden. Läuft nach jedem vollständigen Auffrischen.
+   *
+   * Der ERSTE Stand einer Verfolgung wird nur notiert: was beim Start schon
+   * so ist, steht ohnehin im Panel, das man gerade ansieht.
+   */
+  checkAlerts() {
+    const alerts = this.collectAlerts();
+    if (this.alertBaseline) {
+      for (const a of alerts) this.alerted.set(a.key, a.level);
+      this.alertBaseline = false;
+      return;
+    }
+    if (!this.notify) return;
+
+    for (const a of alerts) {
+      const vorher = this.alerted.get(a.key);
+      if (vorher != null && vorher >= a.level) continue;
+      this.alerted.set(a.key, a.level);
+      LiveTracker.showNotification(a.title, a.body, a.key.split('|')[0]);
+    }
+  }
+
+  /**
+   * Eine Benachrichtigung zeigen.
+   *
+   * Über den Service Worker, wenn einer läuft: Chrome auf Android wirft bei
+   * `new Notification()` einen Fehler und kennt nur diesen Weg. Der
+   * Konstruktor bleibt die Rückfallebene für Desktop-Browser ohne
+   * Service Worker.
+   */
+  static async showNotification(title, body, kind) {
+    const opts = {
+      body,
+      // Eine Sorte ersetzt die vorige, statt sich zu stapeln.
+      tag: `omnirail-${kind}`,
+      renotify: true,
+      icon: '/assets/pictures/MMR_v2.png?v=2',
+      badge: '/assets/pictures/MMR_v2.png?v=2',
+    };
+    try { navigator.vibrate?.([180, 90, 180]); } catch { /* egal */ }
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration?.();
+      if (reg) { await reg.showNotification(title, opts); return; }
+    } catch { /* weiter mit dem Konstruktor */ }
+    try { new Notification(title, opts); } catch { /* dann eben nicht */ }
+  }
+
+  /**
+   * Verspätung eines Abschnitts nach dem nachgeladenen Zuglauf.
+   *
+   * NICHT delayOf(): das bevorzugt die Ist-Zeiten, die die Suche
+   * mitgebracht hat, und die sind nach einer halben Stunde Fahrt veraltet.
+   * Für eine Benachrichtigung zählt der frischeste Stand - also der Halt im
+   * Zuglauf, Ankunft am Ausstieg vor Abfahrt am Einstieg.
+   */
+  static liveDelay(entry) {
+    const stops = entry.data?.stops || [];
+    const find = (place) => stops.find((s) => String(s.id || '') === String(place?.id || ' '))
+      || stops.find((s) => s.name === place?.name);
+    const aus = find(entry.leg.to);
+    const ein = find(entry.leg.from);
+    for (const [plan, real] of [[aus?.arrival, aus?.arrivalReal], [ein?.departure, ein?.departureReal]]) {
+      const p = Date.parse(plan || '');
+      const r = Date.parse(real || '');
+      if (Number.isFinite(p) && Number.isFinite(r)) return Math.round((r - p) / 60000);
+    }
+    return entry.data ? (entry.data.delay ?? 0) : LiveTracker.delayOf(entry);
+  }
+
+  /**
+   * Fährt der Zug an einem anderen Gleis ab als bei der Suche angegeben?
+   *
+   * Die Suche nennt das Plangleis, der Zuglauf das aktuelle - HAFAS setzt
+   * dort das Ist-Gleis vor das Plangleis.
+   *
+   * @returns {?{planned:string, now:string}}
+   */
+  static platformChange(entry) {
+    const planned = String(entry.leg.from?.platform || '').trim();
+    if (!planned || !entry.data) return null;
+    const stops = entry.data.stops || [];
+    const ein = stops.find((s) => String(s.id || '') === String(entry.leg.from?.id || ' '))
+      || stops.find((s) => s.name === entry.leg.from?.name);
+    const now = String(ein?.platform || '').trim();
+    return now && now !== planned ? { planned, now } : null;
+  }
+
+  /** Der Satz zur Gefahr - im Panel und in der Benachrichtigung derselbe. */
+  riskText(r) {
+    return {
+      cancelled: `${r.train} ab ${r.station?.name} fällt aus.`,
+      missed: `${r.train} in ${r.station?.name} ist ${Math.abs(r.gap)} min vor deiner Ankunft weg.`,
+    }[r.status] || `Nur ${r.gap} min für den Umstieg auf ${r.train} in ${r.station?.name}.`;
   }
 
   // -------------------------------------------------------------------
@@ -480,21 +832,48 @@ export class LiveTracker {
     const p = (n) => String(n).padStart(2, '0');
     const ctx = this.context();
 
+    const date = `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}`;
+    const time = `${p(at.getHours())}:${p(at.getMinutes())}`;
+    const bedroht = this.legs[this.risk.legIndex]?.leg;
+
     this.optionsLoading = true;
     try {
-      const res = await api.nextConnection({
+      const neu = api.nextConnection({
         from,
         to: dest,
-        date: `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}`,
-        time: `${p(at.getHours())}:${p(at.getMinutes())}`,
+        date,
+        time,
         travelClass: ctx.travelClass,
         discounts: ctx.discounts,
         products: ctx.products,
         // Den Zug, den man gerade verpasst, nicht noch einmal anbieten.
-        exclude: this.legs[this.risk.legIndex]?.leg?.trainNumber || '',
+        exclude: bedroht?.trainNumber || '',
         limit: 3,
-      });
-      this.options = res.connections || [];
+      }).then((res) => res.connections || []).catch(() => []);
+
+      // Fällt der Zug AUS, zusätzlich die Brücke über die MVG: in München
+      // kennt nur sie die U-Bahn, und genau die ist bei einer gesperrten
+      // Stammstrecke der Weg. Bei einem bloss verpassten Anschluss fährt der
+      // Zug ja noch — dort reicht der nächste.
+      const bruecke = this.risk.status === 'cancelled'
+        && bedroht?.from?.lat != null && bedroht?.to?.lat != null
+        ? api.localRoute({
+            fromLat: bedroht.from.lat, fromLon: bedroht.from.lon,
+            toLat: bedroht.to.lat, toLon: bedroht.to.lon,
+            date, time,
+          })
+            .then((res) => {
+              const cut = (this.journey.legs || []).indexOf(bedroht);
+              return (res.connections || [])
+                .map((b) => bridgeOption(this.journey, cut, b))
+                .filter(Boolean);
+            })
+            .catch(() => [])
+        : Promise.resolve([]);
+
+      const [b, n] = await Promise.all([bruecke, neu]);
+      // Höchstens zwei Brücken — siehe loadReplacements() in app.js.
+      this.options = mergeAlternatives([...b.slice(0, 2), ...n], 4);
       this.optionsFor = this.risk.key;
     } catch {
       this.options = [];
@@ -632,7 +1011,7 @@ export class LiveTracker {
     // Zug bei einem verspäteten Lauf außerhalb jedes Zeitfensters und wäre
     // gar nicht auffindbar. Deshalb wird der Restfahrplan um die bekannte
     // Verspätung verschoben — genau das, was die Anzeigetafeln auch tun.
-    const shift = LiveTracker.delayOf(current) * 60_000;
+    const shift = LiveTracker.liveDelay(current) * 60_000;
 
     const timeOf = (s, kind) => {
       const real = kind === 'dep' ? s.departureReal : s.arrivalReal;
@@ -841,9 +1220,10 @@ export class LiveTracker {
 
     // Ohne eine einzige Zuglauf-Kennung lässt sich nichts auffrischen. Die
     // Abschnitte stehen trotzdem da — mit dem, was die Suche wusste.
-    if (this.legs.every((e) => !e.jid)) {
+    if (this.legs.every((e) => !e.src)) {
+      const quelle = String(this.journey.source || '').includes('mvg') ? 'der MVG' : 'der DB';
       p.append(el('p', 'live__note',
-        'Der Fahrplan dieser Verbindung kommt von der DB und liefert keine '
+        `Der Fahrplan dieser Verbindung kommt von ${quelle} und liefert keine `
         + 'Zuglauf-Kennungen — gezeigt ist der Stand der Suche, er frischt '
         + 'sich nicht von selbst auf.'));
     }
@@ -857,11 +1237,16 @@ export class LiveTracker {
 
     for (const entry of this.legs) p.append(this.renderLeg(entry));
 
-    for (const m of this.messages) {
-      const box = el('p', 'live__msg');
-      box.append(el('strong', null, m.title || 'Meldung'));
-      if (m.description) box.append(el('span', 'live__msg-text', ' ' + m.description));
-      p.append(box);
+    // MVG-Meldungen: nur die Überschrift, der Fließtext zum Aufklappen, und
+    // ab der dritten gebündelt - siehe messageBox().
+    const mvg = this.messages.map((m) => messageBox('live__msg', m.title || 'Meldung', m.description));
+    p.append(...mvg.slice(0, 2));
+    if (mvg.length > 2) {
+      const mehr = el('details', 'live__msgs');
+      mehr.append(el('summary', null,
+        mvg.length === 3 ? 'eine weitere Meldung' : `${mvg.length - 2} weitere Meldungen`));
+      mehr.append(...mvg.slice(2));
+      p.append(mehr);
     }
   }
 
@@ -902,10 +1287,26 @@ export class LiveTracker {
     gpsBtn.addEventListener('click', () => this.toggleGps());
     ctl.append(gpsBtn);
 
+    // Nur anbieten, wo es auch geht - über HTTP oder in Safari ohne
+    // Startbildschirm-App gibt es keine Benachrichtigungen.
+    if (LiveTracker.canNotify()) {
+      const bell = el('button', 'live__gps live__notify', this.notify ? 'Hinweise an' : 'Benachrichtigen');
+      bell.type = 'button';
+      if (this.notify) bell.classList.add('is-on');
+      bell.setAttribute('aria-pressed', String(this.notify));
+      bell.title = this.notify
+        ? 'Meldet Ausfall, Verspätung ab 5 min und Gleiswechsel — antippen zum Abschalten.'
+        : 'Bei Ausfall, Verspätung ab 5 min oder Gleiswechsel eine Benachrichtigung schicken.';
+      bell.addEventListener('click', () => this.toggleNotify());
+      ctl.append(bell);
+    }
+
+    const stand = this.updatedAt ? `Stand ${fmtTime(this.updatedAt.toISOString())}` : '';
     const stamp = el('span', 'live__stamp',
       this.loading ? 'aktualisiert …'
-        : this.updatedAt ? `Stand ${fmtTime(this.updatedAt.toISOString())}`
-        : '');
+        : this.offline ? `offline${stand ? ' · ' + stand : ''}`
+        : stand);
+    if (this.offline) stamp.classList.add('is-offline');
     ctl.append(stamp);
 
     const close = el('button', 'live__close', '×');
@@ -928,10 +1329,7 @@ export class LiveTracker {
       cancelled: 'Zug fällt aus',
       missed: 'Anschluss weg',
     }[r.status] || 'Anschluss wird knapp'));
-    head.append(el('span', 'live__risk-text', {
-      cancelled: `${r.train} ab ${r.station?.name} fällt aus.`,
-      missed: `${r.train} in ${r.station?.name} ist ${Math.abs(r.gap)} min vor deiner Ankunft weg.`,
-    }[r.status] || `Nur ${r.gap} min für den Umstieg auf ${r.train} in ${r.station?.name}.`));
+    head.append(el('span', 'live__risk-text', this.riskText(r)));
     box.append(head);
 
     if (this.optionsLoading) {
@@ -948,8 +1346,19 @@ export class LiveTracker {
       r.status === 'ok' ? 'Falls es nicht klappt:' : 'Stattdessen:'));
 
     const list = el('div', 'live__options');
-    for (const opt of this.options) list.append(this.renderOption(opt));
+    for (const opt of this.options.slice(0, OPTIONS_VISIBLE)) list.append(this.renderOption(opt));
     box.append(list);
+
+    const rest = this.options.slice(OPTIONS_VISIBLE);
+    if (rest.length > 0) {
+      const mehr = el('details', 'live__msgs live__more-options');
+      mehr.append(el('summary', null,
+        rest.length === 1 ? 'eine weitere Möglichkeit' : `${rest.length} weitere Möglichkeiten`));
+      const l2 = el('div', 'live__options');
+      for (const opt of rest) l2.append(this.renderOption(opt));
+      mehr.append(l2);
+      box.append(mehr);
+    }
     return box;
   }
 
@@ -963,11 +1372,16 @@ export class LiveTracker {
     btn.append(times);
 
     const meta = [];
-    if (opt.trains?.length) meta.push(opt.trains.join(' · '));
+    // Aus den Abschnitten beschriften, mit derselben Regel wie überall sonst.
+    const zuege = (opt.legs || []).filter((l) => l.mode === 'train').map(trainLabel);
+    const namen = zuege.length ? zuege : (opt.trains || []);
+    if (namen.length) meta.push(namen.join(' · '));
     if (typeof opt.changes === 'number') {
       meta.push(opt.changes === 0 ? 'direkt' : `${opt.changes} Umstieg${opt.changes > 1 ? 'e' : ''}`);
     }
     btn.append(el('span', 'live__option-meta', meta.join(' · ')));
+    // Nur das Stück um den Ausfall ist neu, danach geht es wie geplant weiter.
+    if (opt.bridged) btn.append(el('span', 'live__option-note', 'weiter wie geplant'));
 
     // Wie viel später als ursprünglich geplant — die Zahl, die zählt.
     const lost = Math.round(
@@ -1022,13 +1436,15 @@ export class LiveTracker {
     // Zeile weiter oben in der Trefferliste zu lesen war.
     const echtzeit = leg.hasRealtime || Boolean(leg.departureReal || leg.arrivalReal)
       || Boolean(data?.hasRealtime);
-    const delay = LiveTracker.delayOf(entry);
+    // Der nachgeladene Zuglauf ist frischer als die Ist-Zeiten der Suche -
+    // die stehen nach einer halben Stunde Fahrt noch auf dem alten Stand.
+    const delay = LiveTracker.liveDelay(entry);
 
     const badge = el('span', 'live__delay');
     if (leg.cancelled || data?.cancelled) {
       badge.textContent = 'Fällt aus';
       badge.dataset.state = 'bad';
-    } else if (!data && jid) {
+    } else if (!data && entry.src) {
       badge.textContent = 'lädt …';
       badge.dataset.state = 'unknown';
     } else if (!echtzeit) {
@@ -1074,20 +1490,31 @@ export class LiveTracker {
       if (neu.length >= 3) break;
     }
 
-    if (neu.length > 0) {
-      const erste = el('p', 'live__leg-msg', neu[0]);
-      erste.title = neu[0];
-      box.append(erste);
-    }
+    // Zwei Zeilen, dann "…" - ein Tipp zeigt den ganzen Satz. Die
+    // HAFAS-Überschriften sind zwar gekürzt, aber 130 Zeichen sind auf dem
+    // Telefon trotzdem vier Zeilen.
+    const zeile = (text) => {
+      const z = el('p', 'live__leg-msg', text);
+      z.title = text;
+      z.tabIndex = 0;
+      z.setAttribute('role', 'button');
+      z.setAttribute('aria-expanded', 'false');
+      const umschalten = () => {
+        const offen = z.classList.toggle('is-open');
+        z.setAttribute('aria-expanded', String(offen));
+      };
+      z.addEventListener('click', umschalten);
+      z.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); umschalten(); }
+      });
+      return z;
+    };
+    if (neu.length > 0) box.append(zeile(neu[0]));
     if (neu.length > 1) {
       const mehr = el('details', 'live__msgs');
       mehr.append(el('summary', null,
         neu.length === 2 ? 'eine weitere Meldung' : `${neu.length - 1} weitere Meldungen`));
-      for (const m of neu.slice(1)) {
-        const z = el('p', 'live__leg-msg', m);
-        z.title = m;
-        mehr.append(z);
-      }
+      for (const m of neu.slice(1)) mehr.append(zeile(m));
       box.append(mehr);
     }
 

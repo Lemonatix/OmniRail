@@ -1,0 +1,51 @@
+# Tests bei jedem Push und Pull Request.
+#
+# Die drei Testskripte brauchen weder Netz noch Pakete und laufen in unter
+# einer Sekunde. Hier fallen vor allem zwei Fehlerarten auf, die im Betrieb
+# still bleiben würden: ein Übersetzer für HAFAS, DB oder MVG, der nach
+# einer Änderung falschen Text liefert (bin/test_providers.php gegen die
+# aufgezeichneten Antworten in bin/fixtures), und ein benutzter, aber nicht
+# importierter Name im Frontend (statische Prüfung in bin/test_units.mjs).
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, mbstring
+          coverage: none
+
+      - name: PHP-Syntax
+        run: |
+          find public bin -name '*.php' -print0 | xargs -0 -n1 php -l > /dev/null
+
+      - name: JavaScript-Syntax
+        run: |
+          for f in public/assets/js/*.js public/assets/js/data/*.js public/sw.js; do
+            node --check "$f"
+          done
+
+      - name: Gattungen, Beschriftung, Live-Verfolgung
+        run: node bin/test_units.mjs
+
+      - name: Streckenerkennung
+        run: node bin/test_routes.mjs
+
+      - name: Übersetzung der Fremdquellen
+        run: php bin/test_providers.php

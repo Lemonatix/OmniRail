@@ -38,6 +38,44 @@ final class DbVendo
         '83' => 'it', '84' => 'nl', '87' => 'fr', '88' => 'be',
     ];
 
+    /**
+     * Zugausstattung aus den `zugattribute` der DB, auf das Wesentliche
+     * gekürzt. Die DB liefert rund vierzig Schlüssel, darunter viel
+     * Werbetext ("Intercity 2: Info unter www.bahn.de/ic2"). Behalten wird,
+     * was die Reise betrifft - und was sie VERHINDERN kann, ist als
+     * `important` markiert: Reservierungspflicht, nur 2. Klasse,
+     * DB-Fahrscheine gelten nicht, Ersatzverkehr.
+     *
+     * Nachgemessen über fünf Relationen (DE, CH-DE, DE-AT), 2026-09.
+     */
+    private const AMENITIES = [
+        'BR' => ['bistro', null, false],            // Wert: "Bordrestaurant" / "Bordbistro"
+        'MP' => ['snacks', 'Snacks am Platz', false],
+        'WV' => ['wifi', 'WLAN', false],
+        'LS' => ['power', 'Steckdosen', false],
+        'UA' => ['business', 'Businessabteil', false],
+        'FB' => ['bike', 'Fahrrad begrenzt', false],
+        'KF' => ['bike', 'Fahrrad kostenlos', false],
+        'FR' => ['bike', 'Fahrrad nur mit Reservierung', true],
+        'FF' => ['bike', 'Fahrrad nur mit Reservierung', true],
+        'RO' => ['wheelchair', 'Rollstuhlplatz', false],
+        'RZ' => ['stepfree', 'Einstieg stufenfrei', false],
+        'CK' => ['checkin', 'Komfort-Check-in', false],
+        'IT' => ['sprinter', 'ICE Sprinter', false],
+        'RP' => ['reservation', 'Reservierungspflicht', true],
+        'K2' => ['class2', 'nur 2. Klasse', true],
+        'DU' => ['nodb', 'DB-Fahrscheine gelten nicht', true],
+        '9N' => ['nodticket', 'Deutschlandticket gilt nicht', true],
+        'SV' => ['replacement', 'Ersatzverkehr', true],
+    ];
+
+    /**
+     * Stationsmeldungen, die für den Weg durch den Bahnhof zählen. Die DB
+     * hängt an jeden Abschnitt alle Meldungen seiner Halte - hier wird nur
+     * behalten, was die Barrierefreiheit am Ein- oder Ausstieg betrifft.
+     */
+    private const ACCESS_PATTERN = '/aufzug|fahrstuhl|rolltreppe|fahrtreppe|barrierefrei|stufenfrei|rollstuhl/iu';
+
     private Http $http;
     private array $cfg;
 
@@ -232,6 +270,270 @@ final class DbVendo
         return ['ok' => true, 'error' => null, 'data' => $out];
     }
 
+    /**
+     * Ein Zuglauf bei der DB, im Format von OebbHafas::journeyDetails().
+     *
+     * WOZU: Die Live-Verfolgung lädt je Abschnitt den Zuglauf nach. Bisher
+     * ging das nur über die jid von HAFAS - und die fehlt genau dort, wo man
+     * sie in München bräuchte: bei U-Bahn, Tram und Bus, deren Fahrplan von
+     * der DB kommt. Die DB hat dafür einen eigenen Endpunkt
+     * (`/web/api/reiseloesung/fahrt`), den auch bahn.de benutzt. Er liefert
+     * Soll- und Ist-Zeit je Halt, auch für die Münchner Tram, in rund 0,2 s.
+     *
+     * @return array{ok:bool,error:?string,data:array}
+     */
+    public function trip(string $journeyId): array
+    {
+        $base = preg_replace('#/angebote/fahrplan$#', '/reiseloesung/fahrt', $this->cfg['bahnde']['journeys'])
+            ?? $this->cfg['bahnde']['journeys'];
+        $url = $base . '?journeyId=' . rawurlencode($journeyId) . '&poly=false';
+
+        $res = $this->http->getJson($url, $this->browserHeaders());
+        $blocked = $this->detectBlock($res);
+        if ($blocked !== null) {
+            return ['ok' => false, 'error' => $blocked, 'data' => []];
+        }
+        if (!$res['ok'] || $res['json'] === null) {
+            return ['ok' => false, 'error' => 'DB: HTTP ' . $res['status'], 'data' => []];
+        }
+        return ['ok' => true, 'error' => null, 'data' => self::mapTrip($res['json'])];
+    }
+
+    /** Antwort von `reiseloesung/fahrt` im Zuglauf-Format der App. */
+    public static function mapTrip(array $f): array
+    {
+        $stops = [];
+        $maxDelay = 0;
+        $hasRealtime = false;
+        foreach (($f['halte'] ?? []) as $h) {
+            $eva = (string) ($h['extId'] ?? '');
+            $crd = ['lat' => null, 'lon' => null];
+            $id  = (string) ($h['id'] ?? '');
+            if (preg_match('/@Y=(-?\d+)@/', $id, $m)) {
+                $crd['lat'] = ((int) $m[1]) / 1000000;
+            }
+            if (preg_match('/@X=(-?\d+)@/', $id, $m)) {
+                $crd['lon'] = ((int) $m[1]) / 1000000;
+            }
+            $arr  = self::iso($h['ankunft']['sollzeit'] ?? null);
+            $arrR = self::iso($h['ankunft']['echtzeit'] ?? null);
+            $dep  = self::iso($h['abfahrt']['sollzeit'] ?? null);
+            $depR = self::iso($h['abfahrt']['echtzeit'] ?? null);
+            $delay = self::maxDelay([[$dep, $depR], [$arr, $arrR]]);
+            if ($delay !== null) {
+                $hasRealtime = true;
+                $maxDelay = max($maxDelay, $delay);
+            }
+            $stops[] = [
+                'name'          => (string) ($h['name'] ?? ''),
+                'id'            => $eva,
+                'country'       => '',
+                'lat'           => $crd['lat'],
+                'lon'           => $crd['lon'],
+                'arrival'       => $arr,
+                'arrivalReal'   => $arrR,
+                'departure'     => $dep,
+                'departureReal' => $depR,
+                'delay'         => $delay,
+                'platform'      => $h['ezGleis'] ?? $h['gleis'] ?? null,
+                'cancelled'     => !empty($h['ausfall']) || !empty($h['cancelled']),
+            ];
+        }
+
+        $messages = [];
+        foreach (array_merge($f['priorisierteMeldungen'] ?? [], $f['risNotizen'] ?? []) as $m) {
+            $txt = Text::plain((string) ($m['text'] ?? $m['value'] ?? ''));
+            if ($txt !== '' && !in_array($txt, array_column($messages, 'text'), true)) {
+                $messages[] = ['text' => $txt, 'from' => null, 'to' => null];
+            }
+        }
+
+        $name = trim((string) ($f['zugName'] ?? ''));
+        return [
+            'category'    => trim((string) ($f['halte'][0]['kategorie'] ?? strtok($name, ' ') ?: '')),
+            'categoryName' => '',
+            'line'        => trim((string) preg_replace('/^\S+\s+/', '', $name)),
+            'trainNumber' => '',
+            'name'        => $name,
+            'direction'   => (string) (end($stops)['name'] ?? ''),
+            'operator'    => '',
+            'delay'       => $hasRealtime ? $maxDelay : null,
+            'hasRealtime' => $hasRealtime,
+            'cancelled'   => !empty($f['cancelled']),
+            'stops'       => $stops,
+            'messages'    => array_slice($messages, 0, 6),
+            'source'      => 'db',
+        ];
+    }
+
+    /**
+     * Alle Tarife einer Verbindung - nicht nur der günstigste.
+     *
+     * Die Suche nennt je Verbindung einen Preis, den billigsten verfügbaren
+     * (meist Super Sparpreis). Welche Bedingungen daran hängen und was die
+     * Alternativen kosten, weiß sie nicht. Das beantwortet die DB erst über
+     * `recon` mit dem ctxRecon der Verbindung: Super Sparpreis, Sparpreis
+     * und Flexpreis in beiden Klassen, jeweils mit Zugbindung, Storno und
+     * City-Ticket, dazu der Preis einer Sitzplatzreservierung.
+     *
+     * Die Antwort ist mit über 100 kB groß, deshalb nur auf Nachfrage und
+     * nur für eine Verbindung.
+     *
+     * @param string[] $discounts
+     * @return array{ok:bool,error:?string,data:array}
+     */
+    public function offers(string $ctxRecon, int $travelClass = 2, array $discounts = []): array
+    {
+        $ermaessigung = $this->mapDiscounts($discounts, $travelClass);
+        $payload = [
+            'klasse'   => $travelClass === 1 ? 'KLASSE_1' : 'KLASSE_2',
+            'reisende' => [[
+                'typ'            => 'ERWACHSENER',
+                'ermaessigungen' => $ermaessigung['payload'],
+                'alter'          => [],
+                'anzahl'         => 1,
+            ]],
+            'ctxRecon' => $ctxRecon,
+            'reservierungsKontingenteVorhanden' => false,
+        ];
+
+        $url = preg_replace('#/fahrplan$#', '/recon', $this->cfg['bahnde']['journeys'])
+            ?? $this->cfg['bahnde']['journeys'];
+
+        $res = $this->http->postJson($url, $payload, $this->browserHeaders());
+        $blocked = $this->detectBlock($res);
+        if ($blocked !== null) {
+            return ['ok' => false, 'error' => $blocked, 'data' => []];
+        }
+        if (($res['status'] !== 200 && $res['status'] !== 201) || $res['json'] === null) {
+            return ['ok' => false, 'error' => 'DB: HTTP ' . $res['status'], 'data' => []];
+        }
+
+        $v = $res['json']['verbindungen'][0] ?? null;
+        if (!is_array($v)) {
+            return ['ok' => false, 'error' => 'DB: Verbindung nicht mehr gefunden.', 'data' => []];
+        }
+
+        return ['ok' => true, 'error' => null, 'data' => self::mapOffers($v, $ermaessigung['applied'] !== [])];
+    }
+
+    /**
+     * Die Angebote aus einer recon-Antwort, aufgeräumt.
+     *
+     * Die DB schickt jedes Angebot mehrfach: einmal regulär (kontextTyp
+     * STANDARD), einmal als "Upgrade" auf die andere Klasse
+     * (UPSELL_VERKNUEPFT), und mit BahnCard im Profil zusätzlich den
+     * Vorher-Preis. Dazu kommen Probe-BahnCards als Werbung (typ BAHNCARD)
+     * - die interessieren nur als Rechenbeispiel "mit BahnCard 25 kostete
+     * es so viel".
+     *
+     * DER RABATT-HINWEIS BEDEUTET ZWEIERLEI. Hat man eine BahnCard
+     * angegeben, steht er an den eigenen Preisen ("20,00 € Ersparnis durch
+     * BahnCard Rabatt"). Hat man keine, hängt er an zusätzlichen Angeboten,
+     * die erst mit einer (Probe-)BahnCard gelten - nachgemessen München-
+     * Frankfurt: Super Sparpreis 79,99 € regulär und 59,99 € "mit BahnCard"
+     * in derselben Liste. Die gehören dann nicht zu den eigenen Tarifen,
+     * sondern in `withBahnCard`.
+     *
+     * @return array{fares:array,withBahnCard:array,seat:?array,bahncard:array}
+     */
+    public static function mapOffers(array $v, bool $hasBahnCard = false): array
+    {
+        $fares = [];
+        $withBahnCard = [];
+        $bahncard = [];
+        $seen = [];
+
+        foreach (($v['reiseAngebote'] ?? []) as $a) {
+            if (!is_array($a)) {
+                continue;
+            }
+            $name   = trim((string) ($a['name'] ?? ''));
+            $amount = $a['preis']['betrag'] ?? null;
+            if ($name === '' || !is_numeric($amount)) {
+                continue;
+            }
+
+            $conditions = [];
+            $rabatt = null;
+            foreach (($a['konditionsAnzeigen'] ?? []) as $k) {
+                $head  = trim((string) ($k['anzeigeUeberschrift'] ?? ''));
+                $short = trim((string) ($k['textKurz'] ?? ''));
+                if ($head === 'Rabatt') {
+                    $rabatt = $short;   // "20,00 € Ersparnis durch BahnCard Rabatt"
+                    continue;
+                }
+                if ($short !== '') {
+                    $conditions[] = ['title' => $head, 'text' => $short];
+                }
+            }
+
+            if (($a['typ'] ?? '') === 'BAHNCARD') {
+                $bahncard[$name] = [
+                    'name'     => $name,
+                    'amount'   => (float) $amount,
+                    'currency' => (string) ($a['preis']['waehrung'] ?? 'EUR'),
+                ];
+                continue;
+            }
+
+            $klasse = ($a['klasse'] ?? '') === 'KLASSE_1' ? 1 : 2;
+            $fare = [
+                'name'       => $name,
+                'class'      => $klasse,
+                'amount'     => (float) $amount,
+                'currency'   => (string) ($a['preis']['waehrung'] ?? 'EUR'),
+                'conditions' => $conditions,
+                // Mit Rabatt-Hinweis ist das der Preis nach einer BahnCard,
+                // die man NICHT hat: die DB rechnet das als Anreiz vor.
+                'discountNote' => $rabatt,
+                'partial'    => !empty($a['teilpreis']),
+            ];
+
+            // Doppelte (dasselbe Angebot als Standard und als Upsell) nur einmal.
+            $key = $name . '|' . $klasse . '|' . $fare['amount'];
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            if ($rabatt !== null && !$hasBahnCard) {
+                $withBahnCard[] = $fare;
+            } else {
+                $fares[] = $fare;
+            }
+        }
+
+        // Nach Klasse, darin günstigste zuerst.
+        $order = static fn($x, $y) => [$x['class'], $x['amount']] <=> [$y['class'], $y['amount']];
+        usort($fares, $order);
+        usort($withBahnCard, $order);
+
+        // Sitzplatzreservierung: steht an jedem Angebot gleich, einmal reicht.
+        $seat = null;
+        foreach (($v['reiseAngebote'] ?? []) as $a) {
+            foreach (($a['hinfahrt']['sitzplatzAngebote'] ?? []) as $sp) {
+                $preis = $sp['angebot']['preis']['betrag'] ?? null;
+                if (is_numeric($preis)) {
+                    $seat = [
+                        'amount'    => (float) $preis,
+                        'currency'  => (string) ($sp['angebot']['preis']['waehrung'] ?? 'EUR'),
+                        'available' => !empty($sp['reservierungVerfuegbar']) && empty($sp['verbindungAusreserviert']),
+                        'required'  => !empty($sp['reservierungspflicht']),
+                        'included'  => !empty($sp['reservierungInklusive']),
+                    ];
+                    break 2;
+                }
+            }
+        }
+
+        return [
+            'fares'        => $fares,
+            'withBahnCard' => $withBahnCard,
+            'seat'         => $seat,
+            'bahncard'     => array_values($bahncard),
+        ];
+    }
+
     // ------------------------------------------------------------------
 
     /**
@@ -357,6 +659,12 @@ final class DbVendo
 
             $legs[] = [
                 'mode'         => 'train',
+                // Kennung des Zuglaufs bei der DB - damit lässt sich der
+                // Abschnitt live verfolgen, auch U-Bahn und Tram, die HAFAS
+                // nicht kennt. Siehe trip().
+                'dbJourneyId'  => isset($a['journeyId']) ? (string) $a['journeyId'] : null,
+                'amenities'    => self::amenitiesOf($vm),
+                'stationNotes' => self::stationNotesOf($a),
                 'occupancy'    => $this->occupancyOf($a),
                 'category'     => trim((string) ($vm['kategorie'] ?? '')),
                 'categoryName' => trim((string) ($vm['produktGattung'] ?? '')),
@@ -422,8 +730,72 @@ final class DbVendo
             'bookingUrl'  => null,
             'price'       => $price,
             'dTicket'     => $dTicketSegments,
+            // Schlüssel für alle Tarife dieser Verbindung, siehe offers().
+            'dbRecon'     => isset($v['ctxRecon']) ? (string) $v['ctxRecon'] : null,
             'source'      => 'db',
         ];
+    }
+
+    /**
+     * Ausstattung eines Zuges, siehe AMENITIES.
+     *
+     * @return array<int,array{key:string,label:string,important:bool}>
+     */
+    public static function amenitiesOf(array $vm): array
+    {
+        $out = [];
+        foreach (($vm['zugattribute'] ?? []) as $z) {
+            $def = self::AMENITIES[(string) ($z['key'] ?? '')] ?? null;
+            if ($def === null) {
+                continue;
+            }
+            [$key, $label, $important] = $def;
+            $label ??= trim((string) ($z['value'] ?? ''));
+            if ($label === '') {
+                continue;
+            }
+            // Je Sorte eine Angabe. Die DB meldet am selben ICE "Fahrradmitnahme
+            // begrenzt möglich" UND "reservierungspflichtig" - die zweite ist
+            // die, nach der man sich richten muss.
+            if (isset($out[$key]) && ($out[$key]['important'] || !$important)) {
+                continue;
+            }
+            $out[$key] = ['key' => $key, 'label' => $label, 'important' => $important];
+        }
+        return array_values($out);
+    }
+
+    /**
+     * Meldungen zur Barrierefreiheit am Ein- und Ausstieg eines Abschnitts.
+     *
+     * Die DB beginnt solche Meldungen mit dem Bahnhofsnamen ("Hamburg Hbf:
+     * Aufgrund einer Aufzugserneuerung Gleis 13/14 ..."). Daran wird sie dem
+     * Einstieg (`from`) oder dem Ausstieg (`to`) zugeordnet; was an einem
+     * Zwischenhalt gilt, an dem man sitzen bleibt, fällt weg.
+     *
+     * @return array<int,array{at:string,text:string}>
+     */
+    public static function stationNotesOf(array $abschnitt): array
+    {
+        $orte = [
+            'from' => trim((string) ($abschnitt['abfahrtsOrt'] ?? '')),
+            'to'   => trim((string) ($abschnitt['ankunftsOrt'] ?? '')),
+        ];
+        $out = [];
+        foreach (($abschnitt['himMeldungen'] ?? []) as $m) {
+            $text = Text::plain((string) ($m['text'] ?? ''));
+            if ($text === '' || !preg_match(self::ACCESS_PATTERN, $text)) {
+                continue;
+            }
+            foreach ($orte as $at => $name) {
+                if ($name === '' || !str_starts_with($text, $name . ':')) {
+                    continue;
+                }
+                $rest = trim(mb_substr($text, mb_strlen($name) + 1));
+                $out[$at . $rest] = ['at' => $at, 'text' => $rest];
+            }
+        }
+        return array_values($out);
     }
 
     /**

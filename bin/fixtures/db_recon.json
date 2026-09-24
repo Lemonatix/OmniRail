@@ -1,0 +1,500 @@
+{
+ "reiseAngebote": [
+  {
+   "name": "Super Sparpreis",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 79.99,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Zugbindung"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung ausgeschlossen"
+    },
+    {
+     "anzeigeUeberschrift": "Kein City-Ticket",
+     "textKurz": "Kein City-Ticket"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 5.5,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Super Sparpreis",
+   "klasse": "KLASSE_1",
+   "preis": {
+    "betrag": 99.99,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Zugbindung"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung ausgeschlossen"
+    },
+    {
+     "anzeigeUeberschrift": "Kein City-Ticket",
+     "textKurz": "Kein City-Ticket"
+    },
+    {
+     "anzeigeUeberschrift": "Kein Zutritt zur DB Lounge",
+     "textKurz": "Kein Zutritt zur DB Lounge"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "UPSELL_VERKNUEPFT",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 6.9,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Sparpreis",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 88.99,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Zugbindung"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung vor 1. Geltungstag kostenpflichtig"
+    },
+    {
+     "anzeigeUeberschrift": "Kein City-Ticket",
+     "textKurz": "Kein City-Ticket"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 5.5,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Sparpreis",
+   "klasse": "KLASSE_1",
+   "preis": {
+    "betrag": 112.99,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Zugbindung"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung vor 1. Geltungstag kostenpflichtig"
+    },
+    {
+     "anzeigeUeberschrift": "Kein City-Ticket",
+     "textKurz": "Kein City-Ticket"
+    },
+    {
+     "anzeigeUeberschrift": "Kein Zutritt zur DB Lounge",
+     "textKurz": "Kein Zutritt zur DB Lounge"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "UPSELL_VERKNUEPFT",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 6.9,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Super Sparpreis",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 59.99,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Rabatt",
+     "textKurz": "20,00 € Ersparnis durch BahnCard Rabatt"
+    },
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Zugbindung"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung ausgeschlossen"
+    },
+    {
+     "anzeigeUeberschrift": "Kein City-Ticket",
+     "textKurz": "Kein City-Ticket"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 5.5,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Probe BahnCard 25",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 19.9,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Sofort sparen",
+     "textKurz": "Sofort und für 3 Monate sparen: die Probe BahnCard lohnt sich oft schon ab der 1. Fahrt"
+    },
+    {
+     "anzeigeUeberschrift": "25 % Rabatt",
+     "textKurz": "25 % Rabatt auf alle Super Spar-, Spar- und Flexpreise"
+    },
+    {
+     "anzeigeUeberschrift": "Digitale BahnCard",
+     "textKurz": "BahnCard digital in den Navigator laden und sofort nutzen"
+    },
+    {
+     "anzeigeUeberschrift": "Kündigungsfrist",
+     "textKurz": "Kündigungsfrist 4 Wochen vor Laufzeitende in Textform"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung ausgeschlossen"
+    }
+   ],
+   "typ": "BAHNCARD",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false
+  },
+  {
+   "name": "Flexpreis",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 118.8,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Freie Zugwahl"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung vor 1. Geltungstag kostenfrei"
+    },
+    {
+     "anzeigeUeberschrift": "City-Ticket",
+     "textKurz": "City-Ticket in München und Frankfurt(Main) inklusive"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 5.5,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Flexpreis",
+   "klasse": "KLASSE_1",
+   "preis": {
+    "betrag": 219.8,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Freie Zugwahl"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung vor 1. Geltungstag kostenfrei"
+    },
+    {
+     "anzeigeUeberschrift": "City-Ticket",
+     "textKurz": "City-Ticket in München und Frankfurt(Main) inklusive"
+    },
+    {
+     "anzeigeUeberschrift": "Zutritt zur DB Lounge",
+     "textKurz": "Zutritt zur DB Lounge"
+    },
+    {
+     "anzeigeUeberschrift": "Sitzplatz",
+     "textKurz": "Sitzplatz inklusive"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "UPSELL_VERKNUEPFT",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": true,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 0,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Sparpreis",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 66.74,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Rabatt",
+     "textKurz": "22,25 € Ersparnis durch BahnCard Rabatt"
+    },
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Zugbindung"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung vor 1. Geltungstag kostenpflichtig"
+    },
+    {
+     "anzeigeUeberschrift": "Kein City-Ticket",
+     "textKurz": "Kein City-Ticket"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 5.5,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Probe BahnCard 25",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 19.9,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Sofort sparen",
+     "textKurz": "Sofort und für 3 Monate sparen: die Probe BahnCard lohnt sich oft schon ab der 1. Fahrt"
+    },
+    {
+     "anzeigeUeberschrift": "25 % Rabatt",
+     "textKurz": "25 % Rabatt auf alle Super Spar-, Spar- und Flexpreise"
+    },
+    {
+     "anzeigeUeberschrift": "Digitale BahnCard",
+     "textKurz": "BahnCard digital in den Navigator laden und sofort nutzen"
+    },
+    {
+     "anzeigeUeberschrift": "Kündigungsfrist",
+     "textKurz": "Kündigungsfrist 4 Wochen vor Laufzeitende in Textform"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung ausgeschlossen"
+    }
+   ],
+   "typ": "BAHNCARD",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false
+  },
+  {
+   "name": "Flexpreis",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 59.4,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Rabatt",
+     "textKurz": "59,40 € Ersparnis durch BahnCard Rabatt"
+    },
+    {
+     "anzeigeUeberschrift": "Zugwahl",
+     "textKurz": "Freie Zugwahl"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung vor 1. Geltungstag kostenfrei"
+    },
+    {
+     "anzeigeUeberschrift": "City-Ticket",
+     "textKurz": "City-Ticket in München und Frankfurt(Main) inklusive"
+    }
+   ],
+   "typ": "REISEANGEBOT",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false,
+   "hinfahrt": {
+    "sitzplatzAngebote": [
+     {
+      "reservierungVerfuegbar": true,
+      "reservierungspflicht": false,
+      "reservierungInklusive": false,
+      "verbindungAusreserviert": false,
+      "angebot": {
+       "preis": {
+        "betrag": 5.5,
+        "waehrung": "EUR"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "Probe BahnCard 50",
+   "klasse": "KLASSE_2",
+   "preis": {
+    "betrag": 76.9,
+    "waehrung": "EUR"
+   },
+   "konditionsAnzeigen": [
+    {
+     "anzeigeUeberschrift": "Sofort sparen",
+     "textKurz": "Sofort und für 3 Monate sparen: die Probe BahnCard lohnt sich oft schon ab der 1. Fahrt"
+    },
+    {
+     "anzeigeUeberschrift": "50 % bzw. 25 % Rabatt",
+     "textKurz": "50 % Rabatt auf die Flexpreise sowie 25 % auf die Super Spar- und Sparpreise"
+    },
+    {
+     "anzeigeUeberschrift": "Digitale BahnCard",
+     "textKurz": "BahnCard digital in den Navigator laden und sofort nutzen"
+    },
+    {
+     "anzeigeUeberschrift": "Kündigungsfrist",
+     "textKurz": "Kündigungsfrist 4 Wochen vor Laufzeitende in Textform"
+    },
+    {
+     "anzeigeUeberschrift": "Stornierung",
+     "textKurz": "Stornierung ausgeschlossen"
+    }
+   ],
+   "typ": "BAHNCARD",
+   "kontextTyp": "STANDARD",
+   "teilpreis": false
+  }
+ ]
+}

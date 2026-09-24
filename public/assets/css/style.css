@@ -554,6 +554,80 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
   border-radius: 3px;
 }
 
+/* Name links, Land und Stern rechts - der Name darf umbrechen, nicht
+   die Knöpfe verdrängen. */
+.ac__name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+.ac__group {
+  padding: 0.35rem 0.6rem 0.15rem;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ac__star, .fav-star {
+  flex: none;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 0.25rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ac__star:hover, .fav-star:hover { color: var(--amber); }
+.ac__star.is-on, .fav-star.is-on { color: var(--amber); }
+
+/* Kopfzeile eines Feldes: Beschriftung links, Stern rechts, ohne dass die
+   Feldhöhe springt, wenn der Stern erscheint. */
+.field__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-height: 1.2rem;
+}
+
+.field__head .fav-star { min-height: 0; margin: -0.3rem 0; }
+
+/* --- Favoriten als Knöpfe ------------------------------------------ */
+
+.fav-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.fav-chips[hidden] { display: none; }
+
+.fav-chips__label { color: var(--amber); font-size: 0.9rem; }
+
+.fav-chip {
+  max-width: 100%;
+  min-height: 34px;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.fav-chip:hover { border-color: var(--accent); color: var(--accent); }
+
 /* --- Ausklappbereiche ---------------------------------------------- */
 
 .section {
@@ -1745,7 +1819,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .live__title strong { color: var(--accent); font-family: var(--font-mono); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .live__route { font-size: 0.88rem; color: var(--text-dim); }
 
-.live__ctl { display: flex; align-items: center; gap: 0.5rem; }
+.live__ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 
 .live__gps {
   padding: 0.28rem 0.65rem;
@@ -1826,16 +1900,68 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .live__risk--missed .live__risk-head strong,
 .live__risk--cancelled .live__risk-head strong { color: var(--rose); }
 
-/* Meldungen füllen höchstens vier Zeilen. Was nicht hineinpasst, endet mit
-   "…"; der ganze Text hängt am Titel und im aufgeklappten Kasten. */
+/* Meldungen füllen höchstens zwei Zeilen. Was nicht hineinpasst, endet mit
+   "…"; ein Tipp zeigt den ganzen Satz (Klasse is-open, siehe live.js). Vier
+   Zeilen waren auf dem Telefon je Meldung ein Viertel des Bildschirms. */
 .live__leg-msg {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   overflow-wrap: anywhere;
+  cursor: pointer;
 }
+
+.live__leg-msg.is-open {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+
+.live__leg-msg:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* MVG-Meldungen: die Überschrift in zwei Zeilen, der Fließtext aufklappbar. */
+.live__msg-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: 500;
+  color: var(--text);
+}
+
+details.live__msg > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+details.live__msg > summary::-webkit-details-marker { display: none; }
+details.live__msg > summary::after {
+  content: 'mehr';
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--amber);
+}
+details.live__msg[open] > summary::after { content: 'weniger'; }
+details.live__msg[open] .live__msg-title { -webkit-line-clamp: unset; line-clamp: none; }
+
+details.live__msg .live__msg-text {
+  margin: 0.35rem 0 0;
+  max-height: 14rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.live__more-options { margin-top: 0.35rem; }
+.live__more-options .live__options { margin-top: 0.35rem; }
 
 .live__msgs { margin: 0.2rem 0 0; }
 
@@ -2522,6 +2648,69 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 .map__track.is-other-level,
 .map__track-tag.is-other-level { opacity: 0.16; }
 
+/* --- Treppen, Rolltreppen, Aufzüge ---------------------------------
+   Lila wie die Fußwege in der Verbindung: es ist der Weg zu Fuß. Was
+   Richtung Abfahrtsgleis führt, ist kräftiger und in Bernstein.
+   ------------------------------------------------------------------- */
+
+.map__conn { opacity: 0.55; }
+.map__conn.is-useful { opacity: 1; }
+
+.map__conn-line {
+  stroke: var(--purple);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+}
+
+.map__conn--steps .map__conn-line { stroke-dasharray: 1.5 2.5; stroke-width: 4; }
+.map__conn.is-useful .map__conn-line { stroke: var(--amber); }
+
+.map__conn-arrow { fill: var(--purple); }
+.map__conn.is-useful .map__conn-arrow { fill: var(--amber); }
+
+.map__conn-box {
+  fill: var(--surface-card);
+  stroke: var(--purple);
+  stroke-width: 1.5;
+}
+
+.map__conn.is-useful .map__conn-box { stroke: var(--amber); stroke-width: 2; }
+
+.map__conn-glyph {
+  font-size: 10px;
+  font-weight: 700;
+  fill: var(--purple);
+  pointer-events: none;
+}
+
+.map__conn.is-useful .map__conn-glyph { fill: var(--amber); }
+
+.map__conn-tag {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--text-dim);
+  paint-order: stroke;
+  stroke: var(--map-casing);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.map__conn.is-useful .map__conn-tag { fill: var(--amber); }
+
+.xfer__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.xfer__legend-item { display: inline-flex; align-items: center; gap: 0.3rem; }
+.xfer__legend-sym { color: var(--purple); font-weight: 700; }
+.xfer__legend-note { flex-basis: 100%; }
+
 /* --- Ebenenumschalter ------------------------------------------------
    Unten links, gegenüber den Zoomknöpfen — wie in den Apps der Bahnen, wo
    man ihn dort erwartet.
@@ -2572,6 +2761,25 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 0.66rem;
+}
+
+/* Ersatz für einen ausgefallenen Zug: kein Nebenhinweis, sondern das, was
+   man jetzt tun muss. Deshalb kräftiger als die Absicherung bei knappen
+   Umstiegen. */
+.leg__fallback--ersatz {
+  border-left: 3px solid var(--accent);
+  padding-left: 0.5rem;
+}
+
+.leg__fallback--ersatz .leg__fallback-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.leg__alt-note,
+.live__option-note {
+  font-size: 0.66rem;
+  color: var(--green);
 }
 
 .leg__fallback--pending,
@@ -2725,6 +2933,115 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   line-height: 1.5;
   color: var(--text-muted);
 }
+
+/* --- Ausstattung und Zugang ---------------------------------------- */
+
+.leg__amenities { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.15rem; }
+
+.leg__amenity {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+/* Was die Fahrt verhindern kann: Reservierungspflicht, DB-Fahrscheine
+   gelten nicht, Ersatzverkehr. */
+.leg__amenity--warn { border-color: var(--amber); background: var(--amber-soft); color: var(--amber); }
+
+/* Aufzug gesperrt, Bahnsteig nicht barrierefrei: zwei Zeilen, ein Tipp
+   öffnet den ganzen Text. */
+.leg__access {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  padding: 0.25rem 0.5rem;
+  border-left: 2px solid var(--purple);
+  border-radius: var(--radius-xs);
+  background: var(--purple-soft);
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.leg__access.is-open { display: block; -webkit-line-clamp: unset; line-clamp: none; }
+.leg__access:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.leg__access-label {
+  margin-right: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--purple);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* --- Tarife der DB ---------------------------------------------------- */
+
+.fares { margin-top: 0.6rem; }
+
+.fares__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.fares__summary:hover { color: var(--accent); }
+.fares__hint { font-size: 0.66rem; opacity: 0.8; }
+
+.fares__body {
+  margin-top: 0.4rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.fares__class {
+  margin: 0.5rem 0 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.fares__class:first-child { margin-top: 0; }
+
+.fares__list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
+
+/* Name und Preis in einer Zeile, Bedingungen darunter über die volle
+   Breite - so bleibt es auch auf dem Telefon lesbar. */
+.fares__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.1rem 0.6rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-xs);
+  background: var(--surface-solid);
+}
+
+.fares__name { font-weight: 500; color: var(--text); min-width: 0; }
+.fares__price { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
+.fares__cond, .fares__disc { grid-column: 1 / -1; font-size: 0.72rem; overflow-wrap: anywhere; }
+.fares__disc { color: var(--green); }
+
+.fares__seat, .fares__bc, .fares__note { margin: 0.5rem 0 0; }
+.fares__bc { color: var(--green); }
+.fares__source { margin: 0.5rem 0 0; font-size: 0.7rem; opacity: 0.85; }
 
 /* --- Ticketshops ---------------------------------------------------- */
 
@@ -3485,6 +3802,246 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
 @media (max-width: 360px) {
   .row--options { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .row--options .field--date { grid-column: 1 / -1; }
+}
+
+/* --- Offline ------------------------------------------------------ */
+
+.offline {
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.8rem;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--amber);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-md);
+  font-size: 0.85rem;
+  color: var(--amber);
+}
+
+.offline[hidden] { display: none; }
+.live__stamp.is-offline { color: var(--amber); }
+
+/* --- Tabs: Verbindungen / Abfahrten -------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin: -0.5rem 0 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  min-height: 44px;
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.tab:hover { color: var(--text); }
+.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* --- Abfahrtstafel ------------------------------------------------- */
+
+.board__form { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.board__opts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.board__time { flex: 0 1 8rem; min-width: 6.5rem; }
+
+/* Umschalter Abfahrt/Ankunft: zwei Knöpfe als ein Bauteil. */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.seg__btn {
+  min-height: 40px;
+  padding: 0.4rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.seg__btn + .seg__btn { border-left: 1px solid var(--border-strong); }
+.seg__btn.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+
+.board__filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.board__filter[hidden] { display: none; }
+
+.board__chip {
+  min-height: 34px;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.board__chip.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+#board-status { margin: 0.6rem 0; }
+
+.board__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-card);
+  overflow: hidden;
+}
+
+.board__list:empty { display: none; }
+.board__empty { padding: 1rem; color: var(--text-muted); font-size: 0.88rem; }
+
+.dep + .dep { border-top: 1px solid var(--border); }
+
+/* Eine Zeile wie auf der Anzeigetafel: Zeit, Linie, Ziel, Gleis. Auf dem
+   Telefon rutscht die Zusatzzeile (Verspätung, Countdown) unter das Ziel. */
+.dep__main {
+  display: grid;
+  grid-template-columns: 4.2rem auto 1fr auto;
+  grid-template-areas: "time line dir plat" "time line info plat";
+  align-items: center;
+  column-gap: 0.6rem;
+  width: 100%;
+  min-height: 48px;
+  padding: 0.5rem 0.8rem;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dep__main.is-static { cursor: default; }
+.dep__main:not(.is-static):hover { background: var(--surface-card-hover); }
+.dep__main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.dep__time {
+  grid-area: time;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.dep__plan { font-weight: 500; }
+.dep__plan.is-shifted { color: var(--text-muted); text-decoration: line-through; font-weight: 400; font-size: 0.8rem; }
+.dep__real { color: var(--amber); font-weight: 500; }
+.dep__real.is-late { color: var(--rose); }
+
+.dep__line { grid-area: line; justify-self: start; cursor: inherit; }
+
+.dep__dir {
+  grid-area: dir;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92rem;
+}
+
+.dep__info {
+  grid-area: info;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.dep__plat {
+  grid-area: plat;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.dep__plat.is-changed {
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-xs);
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-weight: 600;
+}
+
+.dep.is-cancelled .dep__dir,
+.dep.is-cancelled .dep__plan { text-decoration: line-through; color: var(--text-muted); }
+.dep.is-cancelled .dep__info { color: var(--rose); font-weight: 600; }
+
+.dep__detail { padding: 0 0.8rem 0.7rem calc(0.8rem + 4.2rem + 0.6rem); }
+.dep__loading { margin: 0; font-size: 0.8rem; color: var(--text-muted); }
+
+.dep__remark {
+  margin: 0 0 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-xs);
+  background: var(--amber-soft);
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
+.dep__stops { margin: 0; padding: 0; list-style: none; }
+
+.dep__stop {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.1rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.dep__stop.is-cancelled { text-decoration: line-through; color: var(--rose); }
+.dep__stop-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.dep__stop-real { color: var(--amber); }
+.dep__stop-name { font-family: var(--font-main); font-size: 0.82rem; color: var(--text); min-width: 0; }
+.dep__stop-plat { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
+
+#board-more { width: 100%; margin-top: 0.75rem; }
+#board-more[hidden] { display: none; }
+
+@media (max-width: 640px) {
+  .dep__main {
+    grid-template-columns: 3.6rem 1fr auto;
+    grid-template-areas: "time line plat" "time dir dir" "time info info";
+    row-gap: 0.1rem;
+    padding: 0.5rem 0.6rem;
+  }
+  .dep__detail { padding-left: calc(0.6rem + 3.6rem + 0.6rem); padding-right: 0.6rem; }
+  .board__opts .btn--primary { flex: 1 1 100%; }
+  /* "jetzt" gehört neben die Uhrzeit, nicht in eine eigene Zeile. */
+  .board__opts .btn--ghost { width: auto; flex: 0 0 auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

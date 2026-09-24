@@ -7,7 +7,7 @@
  */
 
 import { api } from './api.js';
-import { rank, highlights, setFxRates, spliceJourney } from './scoring.js';
+import { rank, highlights, setFxRates, spliceJourney, bridgeOption, mergeAlternatives } from './scoring.js';
 import { renderResults, renderNotices } from './render.js';
 import { RouteMap, setMapTheme, trainLabel } from './map.js';
 import { TRAIN_MODELS } from './data/trains.js';
@@ -15,6 +15,9 @@ import { ROUTES, ratingsBySpeed } from './data/routes.js';
 import { initMvgTicker } from './mvgTicker.js';
 import { initWorks } from './works.js';
 import { LiveTracker } from './live.js';
+import { setupAutocomplete, renderFavoriteChips } from './autocomplete.js';
+import { places } from './favorites.js';
+import { initBoard } from './board.js';
 
 // v2: Zugnummern-Regeln wurden durch Modellbewertungen ersetzt.
 const STORAGE_KEY = 'train-maxxing:v2';
@@ -116,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   live.onJourneyChange = saveTracked;
 
+  setupTabs();
   setupMode();
   setupSort();
   setupLiveToggle();
@@ -135,6 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Eine laufende Verfolgung überlebt Neuladen und neue Suchen.
   restoreTracked();
+  setupOffline();
 
   // Geteilte Suche direkt ausführen, damit der Empfänger nichts tun muss.
   if (shared) runSearch();
@@ -143,6 +148,93 @@ document.addEventListener('DOMContentLoaded', () => {
   // nur seine jid und darf deshalb sofort aufgehen, parallel zur Suche.
   if (state.trainJid) showTrainDetails({ jid: state.trainJid });
 });
+
+// ======================================================================
+// Offline
+// ======================================================================
+
+/**
+ * Service Worker anmelden und den Offline-Hinweis schalten.
+ *
+ * Der Service Worker liegt neben index.html, damit sein Bereich die ganze
+ * App umfasst - auch wenn sie in einem Unterordner der Website liegt. Nur
+ * über HTTPS (oder localhost); sonst läuft die App wie bisher ohne.
+ */
+function setupOffline() {
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      // Ohne Service Worker geht alles außer dem Offline-Betrieb.
+    });
+  }
+  const banner = $('#offline');
+  let ausCache = false;
+  const update = () => { if (banner) banner.hidden = navigator.onLine && !ausCache; };
+  window.addEventListener('omnirail:net', (e) => {
+    ausCache = Boolean(e.detail?.fromCache);
+    update();
+  });
+  window.addEventListener('online', () => {
+    update();
+    // Zurück im Netz: die Verfolgung sofort auffrischen, nicht erst in 30 s.
+    if (live?.journey) live.refresh();
+  });
+  window.addEventListener('offline', update);
+  update();
+}
+
+// ======================================================================
+// Ansichten: Verbindungen und Abfahrtstafel
+// ======================================================================
+
+let board = null;
+
+/**
+ * Zwei Tabs. Die Tafel wird erst beim ersten Öffnen aufgebaut - wer nur
+ * Verbindungen sucht, lädt sie nie. Beim Zurückschalten muss die Karte
+ * neu zeichnen: solange ihr Tab verborgen war, war sie null Pixel groß.
+ */
+function setupTabs() {
+  const tabs = { search: $('#tab-search'), board: $('#tab-board') };
+  const views = { search: $('#view-search'), board: $('#view-board') };
+  if (!tabs.search || !tabs.board) return;
+
+  const show = (name, { focus = false, remember = true } = {}) => {
+    for (const [k, tab] of Object.entries(tabs)) {
+      const on = k === name;
+      tab.classList.toggle('is-active', on);
+      tab.setAttribute('aria-selected', String(on));
+      tab.tabIndex = on ? 0 : -1;
+      views[k].hidden = !on;
+    }
+    if (name === 'board') {
+      board ??= initBoard(views.board);
+      board.activate();
+    } else {
+      board?.deactivate();
+      requestAnimationFrame(() => map?.render());
+    }
+    if (remember) {
+      const url = location.pathname + location.search + (name === 'board' ? '#abfahrten' : '');
+      history.replaceState(null, '', url);
+    }
+    if (focus) tabs[name].focus();
+  };
+
+  tabs.search.addEventListener('click', () => show('search'));
+  tabs.board.addEventListener('click', () => show('board'));
+  // Pfeiltasten wechseln den Tab, wie bei einer Tab-Leiste üblich.
+  for (const tab of Object.values(tabs)) {
+    tab.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      show(tab === tabs.search ? 'board' : 'search', { focus: true });
+    });
+  }
+  window.addEventListener('hashchange', () => {
+    show(location.hash === '#abfahrten' ? 'board' : 'search', { remember: false });
+  });
+  if (location.hash === '#abfahrten') show('board', { remember: false });
+}
 
 // ======================================================================
 // Persistenz
@@ -502,11 +594,44 @@ function setupStationInputs() {
   setupAutocomplete($('#from'), $('#from-list'), (loc) => {
     state.from = loc;
     saveSettings();
+    renderStars();
   });
   setupAutocomplete($('#to'), $('#to-list'), (loc) => {
     state.to = loc;
     saveSettings();
+    renderStars();
   });
+
+  // Welches Feld zuletzt angefasst wurde - dorthin setzt ein Favoriten-Knopf
+  // seinen Ort. Siehe renderFavoriteChips().
+  let zuletzt = null;
+  $('#from').addEventListener('focus', () => { zuletzt = 'from'; });
+  $('#to').addEventListener('focus', () => { zuletzt = 'to'; });
+
+  renderFavoriteChips($('#fav-chips'), {
+    target: () => zuletzt || (state.from && $('#from').value.trim() ? 'to' : 'from'),
+    fill: (field, loc) => {
+      state[field] = loc;
+      $(`#${field}`).value = loc.name;
+      places.remember(loc);
+      // Nach "Von" ist "Nach" dran: zwei Tipps ergeben eine Strecke.
+      zuletzt = field === 'from' ? 'to' : 'from';
+      saveSettings();
+      renderStars();
+    },
+  });
+
+  // Stern am Feld: den gewählten Bahnhof als Favorit merken.
+  for (const field of ['from', 'to']) {
+    $(`#${field}-star`).addEventListener('click', () => {
+      if (state[field]) places.toggle(state[field]);
+    });
+  }
+  places.onChange(renderStars);
+  // Wer den Namen umtippt, hat den gemerkten Bahnhof nicht mehr gewählt.
+  $('#from').addEventListener('input', renderStars);
+  $('#to').addEventListener('input', renderStars);
+  renderStars();
 
   setupAutocomplete($('#via'), $('#via-list'), (loc) => {
     state.via = loc;
@@ -528,7 +653,26 @@ function setupStationInputs() {
     $('#from').value = state.from?.name || '';
     $('#to').value = state.to?.name || '';
     saveSettings();
+    renderStars();
   });
+}
+
+/** Der Stern neben "Von"/"Nach": nur da, wo ein Bahnhof gewählt ist. */
+function renderStars() {
+  for (const field of ['from', 'to']) {
+    const btn = $(`#${field}-star`);
+    if (!btn) continue;
+    const loc = state[field];
+    const passt = loc && $(`#${field}`).value.trim() === loc.name;
+    btn.hidden = !passt;
+    if (!passt) continue;
+    const fav = places.isFavorite(loc);
+    btn.textContent = fav ? '★' : '☆';
+    btn.classList.toggle('is-on', fav);
+    btn.title = fav ? `${loc.name} aus den Favoriten entfernen` : `${loc.name} als Favorit merken`;
+    btn.setAttribute('aria-label', btn.title);
+    btn.setAttribute('aria-pressed', String(fav));
+  }
 }
 
 function renderVia() {
@@ -536,96 +680,6 @@ function renderVia() {
   box.textContent = state.via
     ? `Route wird über ${state.via.name} geführt.`
     : 'Kein Zwischenhalt gesetzt.';
-}
-
-function setupAutocomplete(input, list, onPick) {
-  let timer = null;
-  let abort = null;
-  let items = [];
-  let active = -1;
-
-  const close = () => {
-    list.hidden = true;
-    list.replaceChildren();
-    active = -1;
-  };
-
-  const pick = (loc) => {
-    input.value = loc.name;
-    onPick(loc);
-    close();
-  };
-
-  const draw = () => {
-    list.replaceChildren();
-    items.forEach((loc, i) => {
-      const li = document.createElement('li');
-      li.className = 'ac__item' + (i === active ? ' is-active' : '');
-      li.setAttribute('role', 'option');
-      li.setAttribute('aria-selected', String(i === active));
-
-      const name = document.createElement('span');
-      name.textContent = loc.name;
-      li.append(name);
-
-      if (loc.country) {
-        const c = document.createElement('span');
-        c.className = 'ac__country';
-        c.textContent = loc.country.toUpperCase();
-        li.append(c);
-      }
-
-      li.addEventListener('mousedown', (e) => {
-        e.preventDefault(); // verhindert blur vor dem Klick
-        pick(loc);
-      });
-      list.append(li);
-    });
-    list.hidden = items.length === 0;
-  };
-
-  input.addEventListener('input', () => {
-    const q = input.value.trim();
-    clearTimeout(timer);
-    if (abort) abort.abort();
-
-    if (q.length < 2) {
-      close();
-      return;
-    }
-
-    timer = setTimeout(async () => {
-      abort = new AbortController();
-      try {
-        const res = await api.locations(q, { signal: abort.signal });
-        items = res.locations || [];
-        active = -1;
-        draw();
-      } catch (err) {
-        if (err.name !== 'AbortError') close();
-      }
-    }, 220);
-  });
-
-  input.addEventListener('keydown', (e) => {
-    if (list.hidden || items.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      active = (active + 1) % items.length;
-      draw();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      active = (active - 1 + items.length) % items.length;
-      draw();
-    } else if (e.key === 'Enter' && active >= 0) {
-      e.preventDefault();
-      pick(items[active]);
-    } else if (e.key === 'Escape') {
-      close();
-    }
-  });
-
-  input.addEventListener('blur', () => setTimeout(close, 120));
 }
 
 // ======================================================================
@@ -803,6 +857,15 @@ function applyStateToForm() {
 
   $('#via').value = state.via?.name || '';
   renderVia();
+  renderStars();
+}
+
+/** Koordinaten von Start und Ziel für die Suche - siehe api.journeys(). */
+function endCoords() {
+  return {
+    fromLat: state.from?.lat, fromLon: state.from?.lon,
+    toLat: state.to?.lat, toLon: state.to?.lon,
+  };
 }
 
 /** Weicht der Feldinhalt von der gespeicherten Auswahl ab? */
@@ -873,7 +936,12 @@ async function runSearch() {
     state.via = via;
     renderVia();
     saveSettings();
+    renderStars();
   }
+  // Für die Vorschlagsliste: was gesucht wurde, steht beim nächsten Mal
+  // unter "Zuletzt".
+  places.remember(state.from);
+  places.remember(state.to);
 
   if (!state.from || !state.to) {
     status.className = 'status status--error';
@@ -912,6 +980,7 @@ async function runSearch() {
         products: state.products,
         // Der Zwischenhalt ist bewusst nur im Nerd-Modus wirksam.
         via: state.mode === 'nerd' && state.via ? [state.via.id] : [],
+        ...endCoords(),
       },
       { signal: searchAbort.signal }
     );
@@ -943,7 +1012,8 @@ async function runSearch() {
       status.textContent = `Keine Verbindungen für ${state.from.name} → ${state.to.name}${suffix}.`;
     } else {
       status.className = 'status';
-      status.textContent = `${n} Verbindungen · ${state.from.name} → ${state.to.name}`;
+      status.textContent = `${n} Verbindungen · ${state.from.name} → ${state.to.name}`
+        + (payload.fromCache ? ' · offline, gespeicherter Stand' : '');
     }
     updateShareUrl();
     rerank();
@@ -1019,6 +1089,7 @@ function draw() {
     takeAlternative,
     undoAlternative,
     loadPlatforms,
+    loadOffers,
   }, showEarlier);
   // Die Karte zeigt genau die Routen, die auch in der Liste stehen. Die
   // Indizes bleiben dabei gültig, weil von vorne geschnitten wird.
@@ -1058,6 +1129,7 @@ async function showMore() {
       discounts: state.discounts,
       products: state.products,
       via: state.mode === 'nerd' && state.via ? [state.via.id] : [],
+      ...endCoords(),
       scroll: state.scrollCtx,
     });
 
@@ -1116,6 +1188,7 @@ async function showEarlier() {
       discounts: state.discounts,
       products: state.products,
       via: state.mode === 'nerd' && state.via ? [state.via.id] : [],
+      ...endCoords(),
       scroll: state.scrollBackCtx,
     });
 
@@ -1162,6 +1235,13 @@ async function ensureFallbacks() {
 
     for (const leg of trains) {
       if (leg.fallbackState) continue;                       // läuft oder erledigt
+
+      // AUSFALL: Ersatz ist hier keine Absicherung, sondern Pflicht.
+      if (leg.cancelled) {
+        jobs.push(loadReplacements(journey, leg, dest));
+        continue;
+      }
+
       const gap = leg.transferMin;
       if (typeof gap !== 'number' || gap < 1 || gap > 4) continue;
       if (!leg.from?.id) continue;
@@ -1206,6 +1286,74 @@ async function ensureFallbacks() {
 }
 
 /**
+ * Ersatz für einen ausgefallenen Zug.
+ *
+ * Vorher wurde an einem Ausfall nur „Dieser Zug fällt aus" angeschrieben —
+ * und dann nichts. Nachgeladen wurde ausschliesslich bei knappen Umstiegen,
+ * und ein ausgefallener Zug ist nicht knapp, er ist weg. Im Betrieb hiess
+ * das: S-Bahn-Stammstrecke in München gesperrt, die App wusste es, und man
+ * stand ohne Vorschlag da.
+ *
+ * Zwei Quellen, zusammengeführt:
+ *
+ *   ÜBERBRÜCKUNG über die MVG — vom Einstieg des ausgefallenen Zuges zu
+ *   seinem Ausstieg, mit U-Bahn, Tram oder Bus, und dahinter die Reise wie
+ *   geplant. Das ist in München der eigentliche Ersatz: die Fahrplanquelle
+ *   der ÖBB kennt die Münchner U-Bahn nicht und kann ihn gar nicht anbieten.
+ *
+ *   NEUE VERBINDUNG über HAFAS — vom Einstieg bis zum Ziel. Greift überall,
+ *   und auch dort, wo die Brücke den nächsten Zug nicht mehr erreicht.
+ *
+ * Gesucht wird ab der geplanten Abfahrt des ausgefallenen Zuges, nicht eine
+ * Minute danach wie beim knappen Umstieg: der Zug fährt ja nicht, also ist
+ * alles ab seiner Abfahrtszeit eine Möglichkeit.
+ */
+function loadReplacements(journey, leg, dest) {
+  const at = shiftIso(leg.departure, 0);
+  if (!at || !leg.from?.id) {
+    leg.fallbacks = [];
+    leg.fallbackState = 'done';
+    return Promise.resolve();
+  }
+  leg.fallbackState = 'loading';
+
+  const cut = (journey.legs || []).indexOf(leg);
+
+  const neu = api.nextConnection({
+    from: leg.from.id,
+    to: dest,
+    date: at.date,
+    time: at.time,
+    travelClass: state.travelClass,
+    exclude: leg.trainNumber || '',
+    discounts: state.discounts,
+    products: state.products,
+    limit: 3,
+  }).then((res) => res.connections || []).catch(() => []);
+
+  const hatKoordinaten = leg.from?.lat != null && leg.to?.lat != null;
+  const bruecke = hatKoordinaten
+    ? api.localRoute({
+        fromLat: leg.from.lat, fromLon: leg.from.lon,
+        toLat: leg.to.lat, toLon: leg.to.lon,
+        date: at.date, time: at.time,
+      })
+        .then((res) => (res.connections || [])
+          .map((b) => bridgeOption(journey, cut, b))
+          .filter(Boolean))
+        .catch(() => [])
+    : Promise.resolve([]);
+
+  return Promise.all([bruecke, neu]).then(([b, n]) => {
+    // Höchstens zwei Brücken: sie unterscheiden sich oft nur in der Abfahrt
+    // um zwei Minuten und kommen alle zur selben Zeit an — vier davon
+    // verdrängten die neuen Verbindungen bis zum Ziel aus der Liste.
+    leg.fallbacks = mergeAlternatives([...b.slice(0, 2), ...n], 4);
+    leg.fallbackState = 'done';
+  });
+}
+
+/**
  * Eine übernommene Alternative wieder zurücknehmen.
  *
  * Umdisponieren ist eine Entscheidung unter Zeitdruck — sie muss ohne
@@ -1245,6 +1393,29 @@ function undoAlternative(journey) {
  * wenn jemand den Umstiegsplan aufklappt. Ergebnisse werden je Sitzung
  * gemerkt und serverseitig eine Woche gecacht.
  */
+/**
+ * Tarife je Verbindung, einmal geladen. Der Schlüssel enthält Klasse und
+ * Abos: dieselbe Verbindung kostet mit BahnCard etwas anderes. Ein Fehler
+ * wird nicht gemerkt - beim nächsten Aufklappen soll es erneut versucht
+ * werden.
+ */
+const offersCache = new Map();
+
+function loadOffers(journey) {
+  const key = [journey.dbRecon, state.travelClass, state.discounts.join('+')].join('|');
+  if (!offersCache.has(key)) {
+    offersCache.set(key, api.offers({
+      ctx: journey.dbRecon,
+      travelClass: state.travelClass,
+      discounts: state.discounts,
+    }).catch((err) => {
+      offersCache.delete(key);
+      throw err;
+    }));
+  }
+  return offersCache.get(key);
+}
+
 const platformCache = new Map();
 
 async function loadPlatforms(lat, lon, from, to) {
@@ -2017,8 +2188,13 @@ function updateShareUrl() {
   // also nicht als dauerhafte Kennung eines Zuges - für den Reisetag hält
   // sie aber, und länger will man so einen Link ohnehin nicht verschicken.
   if (state.trainJid) p.set('zug', state.trainJid);
+  // Koordinaten, damit auch eine geteilte Stadtfahrt als solche erkannt wird.
+  const koord = (l) => (Number.isFinite(l?.lat) && Number.isFinite(l?.lon)
+    ? `${l.lat.toFixed(5)},${l.lon.toFixed(5)}` : null);
+  if (koord(state.from)) p.set('vonKoord', koord(state.from));
+  if (koord(state.to)) p.set('nachKoord', koord(state.to));
 
-  history.replaceState(null, '', '?' + p.toString());
+  history.replaceState(null, '', '?' + p.toString() + location.hash);
 }
 
 /**
@@ -2029,8 +2205,12 @@ function applyShareUrl() {
   const p = new URLSearchParams(location.search);
   if (!p.get('von') || !p.get('nach')) return false;
 
-  state.from = { id: p.get('von'), name: p.get('vonName') || p.get('von') };
-  state.to   = { id: p.get('nach'), name: p.get('nachName') || p.get('nach') };
+  const koord = (v) => {
+    const [lat, lon] = String(v || '').split(',').map(Number);
+    return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : {};
+  };
+  state.from = { id: p.get('von'), name: p.get('vonName') || p.get('von'), ...koord(p.get('vonKoord')) };
+  state.to   = { id: p.get('nach'), name: p.get('nachName') || p.get('nach'), ...koord(p.get('nachKoord')) };
   if (p.get('via')) state.via = { id: p.get('via'), name: p.get('viaName') || p.get('via') };
 
   if (p.get('datum')) state.date = p.get('datum');

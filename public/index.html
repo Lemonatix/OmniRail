@@ -27,11 +27,19 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/assets/pictures/MMR_v2.png?v=2">
   <link rel="apple-touch-icon" href="/assets/pictures/MMR_v2.png?v=2">
 
+  <!-- Installierbar und offline nutzbar: siehe sw.js. -->
+  <link rel="manifest" href="manifest.webmanifest">
+
   <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body data-mode="normal">
 
 <div class="wrap">
+
+  <!-- Erscheint ohne Netz. Die App läuft weiter, mit dem zuletzt geladenen Stand. -->
+  <p id="offline" class="offline" role="status" hidden>
+    Offline — gezeigt wird der zuletzt geladene Stand.
+  </p>
 
   <header class="page-head">
     <div class="page-head__title">
@@ -62,11 +70,26 @@
     </div>
   </header>
 
+  <!-- Zwei Ansichten: Verbindungen suchen und die Abfahrtstafel eines
+       Bahnhofs. Die gewählte steht in der Adresse (#abfahrten), damit sie
+       ein Neuladen übersteht und sich als Lesezeichen speichern lässt. -->
+  <nav class="tabs" role="tablist" aria-label="Ansicht">
+    <button type="button" role="tab" id="tab-search" class="tab is-active"
+            aria-controls="view-search" aria-selected="true">Verbindungen</button>
+    <button type="button" role="tab" id="tab-board" class="tab"
+            aria-controls="view-board" aria-selected="false" tabindex="-1">Abfahrten</button>
+  </nav>
+
+  <div id="view-search" role="tabpanel" aria-labelledby="tab-search">
+
   <form id="search-form" class="panel">
 
     <div class="row row--stations">
       <div class="field field--grow">
-        <label for="from">Von</label>
+        <div class="field__head">
+          <label for="from">Von</label>
+          <button type="button" id="from-star" class="fav-star" hidden>☆</button>
+        </div>
         <input type="text" id="from" autocomplete="off" placeholder="z.B. Zürich HB"
                role="combobox" aria-expanded="false" aria-controls="from-list" aria-autocomplete="list">
         <ul class="ac" id="from-list" role="listbox" hidden></ul>
@@ -75,12 +98,20 @@
       <button type="button" id="swap" class="swap" title="Start und Ziel tauschen" aria-label="Start und Ziel tauschen">⇅</button>
 
       <div class="field field--grow">
-        <label for="to">Nach</label>
+        <div class="field__head">
+          <label for="to">Nach</label>
+          <button type="button" id="to-star" class="fav-star" hidden>☆</button>
+        </div>
         <input type="text" id="to" autocomplete="off" placeholder="z.B. Wien Hbf"
                role="combobox" aria-expanded="false" aria-controls="to-list" aria-autocomplete="list">
         <ul class="ac" id="to-list" role="listbox" hidden></ul>
       </div>
     </div>
+
+    <!-- Lieblingsorte: ein Tipp setzt den Ort ins zuletzt benutzte Feld.
+         Gemerkt wird über den Stern neben "Von"/"Nach" oder in der
+         Vorschlagsliste. Siehe favorites.js. -->
+    <div id="fav-chips" class="fav-chips" hidden></div>
 
     <div class="row row--options">
       <div class="field field--date">
@@ -287,6 +318,45 @@
   <!-- Bauarbeiten im Netz: eigene Karte, darunter Abschnitt und Zeitraum.
        Bewusst getrennt von der Routenkarte oben - siehe works.js. -->
   <aside id="works" class="mvg-ticker-mount" hidden></aside>
+
+  </div>
+
+  <!-- Abfahrtstafel. HAFAS für jeden Bahnhof in CH/DE/AT, in München dazu
+       die MVG (U-Bahn, Tram, Bus). Siehe board.js. -->
+  <section id="view-board" class="board" role="tabpanel" aria-labelledby="tab-board" hidden>
+    <form id="board-form" class="panel board__form" autocomplete="off">
+      <div class="field">
+        <div class="field__head">
+          <label for="board-station">Bahnhof oder Haltestelle</label>
+          <button type="button" id="board-star" class="fav-star" hidden>☆</button>
+        </div>
+        <input type="text" id="board-station" placeholder="z.B. München Hbf"
+               role="combobox" aria-expanded="false" aria-controls="board-list" aria-autocomplete="list">
+        <ul class="ac" id="board-list" role="listbox" hidden></ul>
+      </div>
+      <div id="board-fav" class="fav-chips" hidden></div>
+
+      <div class="board__opts">
+        <div class="seg" role="group" aria-label="Abfahrt oder Ankunft">
+          <button type="button" data-board-type="dep" class="seg__btn is-active" aria-pressed="true">Abfahrt</button>
+          <button type="button" data-board-type="arr" class="seg__btn" aria-pressed="false">Ankunft</button>
+        </div>
+        <div class="field board__time">
+          <label for="board-time">ab</label>
+          <input type="time" id="board-time">
+        </div>
+        <button type="button" id="board-now" class="btn btn--ghost">jetzt</button>
+        <button type="submit" class="btn btn--primary">Anzeigen</button>
+      </div>
+    </form>
+
+    <div id="board-filter" class="board__filter" role="group" aria-label="Verkehrsmittel" hidden></div>
+    <p id="board-status" class="status"></p>
+    <ol id="board-out" class="board__list" aria-live="polite"></ol>
+    <button type="button" id="board-more" class="more" hidden>
+      <span class="more__label">Spätere laden</span>
+    </button>
+  </section>
 
   <footer class="page-foot">
     <p>

@@ -97,8 +97,9 @@ return [
         // gedacht. Für den fairen Umgang: cache_ttl['disruptions'] deckelt
         // die Aufruffrequenz.
         //
-        // Halte, die HAFAS nicht kennt, sind mit dieser API NICHT anroutbar
-        // (kein /trips-Endpoint). Das Frontend markiert sie als solche.
+        // Verbindungen sucht die MVG über /routes: Stadtfahrten, der Zubringer
+        // zum Fernzug am Hauptbahnhof und Ersatzwege bei einem Ausfall (siehe
+        // lib/CityTrips.php). Dazu die Abfahrtstafel über /departures.
         'mvg' => [
             'enabled'    => true,
             'endpoint'   => 'https://www.mvg.de/api/bgw-pt/v3',

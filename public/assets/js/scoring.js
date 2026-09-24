@@ -18,6 +18,7 @@
 
 import { typeOf, applyPreferences } from './data/trains.js';
 import { routesOf, autoRoutesOf, speedScore } from './data/routes.js';
+import { trainLabel } from './map.js';
 
 /**
  * Durchschnittlicher Komfort einer Verbindung, gewichtet nach Fahrzeit.
@@ -305,6 +306,75 @@ function variantOf(entry) {
  * @param {number} cutIndex  Index des Abschnitts, ab dem ersetzt wird
  * @param {object} option    vollständige Ersatzverbindung ab dem Umstieg
  */
+/**
+ * Einen ausgefallenen Abschnitt überbrücken, den Rest der Reise behalten.
+ *
+ * `bridge` fährt vom Einstieg des ausgefallenen Zuges zu seinem Ausstieg —
+ * etwa die U5 statt der gesperrten S-Bahn zum Hauptbahnhof. Was danach kam,
+ * bleibt stehen: der ICE ab München Hbf fährt ja trotzdem, und oft ist genau
+ * er gebucht. Das Ergebnis hat die Form einer Alternative, wie sie
+ * `spliceJourney()` an der Stelle `cutIndex` einsetzt.
+ *
+ * Null, wenn die Brücke den nächsten Zug nicht mehr erreicht — dann hilft
+ * nur eine neue Verbindung bis zum Ziel, und die sucht der Aufrufer getrennt.
+ *
+ * @param {object} journey   die ursprüngliche Verbindung
+ * @param {number} cutIndex  Index des ausgefallenen Abschnitts in journey.legs
+ * @param {object} bridge    Verbindung vom Einstieg zum Ausstieg des Ausfalls
+ * @param {number} [bufferMin=3] Zeit, die man zum Umsteigen braucht
+ */
+export function bridgeOption(journey, cutIndex, bridge, bufferMin = 3) {
+  const legs = journey.legs || [];
+  const rest = legs.slice(cutIndex + 1);
+  const next = rest.find((l) => l.mode === 'train');
+
+  if (next) {
+    const an = Date.parse(bridge.arrivalReal || bridge.arrival || '');
+    const ab = Date.parse(next.departureReal || next.departure || '');
+    if (!Number.isFinite(an) || !Number.isFinite(ab)) return null;
+    if (ab - an < bufferMin * 60000) return null;
+  }
+
+  const allLegs = [...(bridge.legs || []), ...rest];
+  const trains = allLegs.filter((l) => l.mode === 'train');
+
+  return {
+    ...bridge,
+    id: `${bridge.id || 'bridge'}>${journey.id || ''}`,
+    legs: allLegs,
+    arrival: next ? journey.arrival : bridge.arrival,
+    arrivalReal: next ? (journey.arrivalReal ?? null) : (bridge.arrivalReal ?? null),
+    changes: Math.max(0, trains.length - 1),
+    trains: trains.map(trainLabel),
+    // Kennzeichen für die Anzeige: nur das Stück um den Ausfall ist neu, und
+    // danach geht es wie geplant weiter. War der Ausfall der letzte Zug,
+    // geht nichts "wie geplant" weiter - dann ist es eine gewöhnliche
+    // Alternative und wird auch nicht so beworben.
+    bridged: Boolean(next),
+  };
+}
+
+/**
+ * Alternativen aus mehreren Quellen zusammenführen.
+ *
+ * Nach Ankunft sortiert — die Frage an einer ausgefallenen Verbindung ist
+ * „wann bin ich trotzdem da" —, und was dieselben Züge zur selben Zeit fährt,
+ * nur einmal: MVG und HAFAS kennen beide die S-Bahn und liefern sie doppelt.
+ */
+export function mergeAlternatives(list, limit) {
+  const seen = new Set();
+  const out = [];
+  const an = (o) => Date.parse(o.arrivalReal || o.arrival || '') || Infinity;
+  for (const o of [...list].sort((a, b) => an(a) - an(b))) {
+    const key = `${(o.departure || '').slice(0, 16)}|${(o.trains || []).join(',')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(o);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 export function spliceJourney(journey, cutIndex, option) {
   const kept = (journey.legs || []).slice(0, cutIndex);
   const legs = [...kept, ...(option.legs || [])];

@@ -20,3 +20,9 @@
         Header set Cache-Control "no-cache, must-revalidate"
     </FilesMatch>
 </IfModule>
+
+# Web-App-Manifest mit dem richtigen Typ - manche Apache-Installationen
+# kennen die Endung nicht und liefern text/plain.
+<IfModule mod_mime.c>
+    AddType application/manifest+json .webmanifest
+</IfModule>

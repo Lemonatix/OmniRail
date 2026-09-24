@@ -1,0 +1,245 @@
+[
+ {
+  "uniqueId": -39599407041110318,
+  "parts": [
+   {
+    "from": {
+     "latitude": 48.128056,
+     "longitude": 11.603709,
+     "stationGlobalId": "de:09162:5",
+     "stationDivaId": 5,
+     "platform": 1,
+     "platformChanged": false,
+     "place": "München",
+     "name": "München, Ostbahnhof",
+     "plannedDeparture": "2026-09-23T23:36:00+02:00",
+     "departureDelayInMinutes": -1,
+     "transportTypes": [
+      "UBAHN",
+      "BUS",
+      "TRAM",
+      "SBAHN",
+      "BAHN"
+     ],
+     "isViaStop": false,
+     "surroundingPlanLink": "",
+     "occupancy": "UNKNOWN",
+     "hasZoomData": true,
+     "hasOutOfOrderEscalator": false,
+     "hasOutOfOrderElevator": false
+    },
+    "to": {
+     "latitude": 48.139348,
+     "longitude": 11.55997,
+     "stationGlobalId": "de:09162:6",
+     "stationDivaId": 6,
+     "platform": 1,
+     "platformChanged": false,
+     "place": "München",
+     "name": "Hauptbahnhof (U, Tram)",
+     "plannedDeparture": "2026-09-23T23:43:00+02:00",
+     "transportTypes": [
+      "UBAHN",
+      "TRAM",
+      "BAHN"
+     ],
+     "isViaStop": false,
+     "surroundingPlanLink": "",
+     "occupancy": "UNKNOWN",
+     "hasZoomData": true,
+     "hasOutOfOrderEscalator": true,
+     "hasOutOfOrderElevator": true
+    },
+    "intermediateStops": [
+     {
+      "latitude": 48.135728,
+      "longitude": 11.598894,
+      "stationGlobalId": "de:09162:580",
+      "stationDivaId": 580,
+      "platform": 1,
+      "platformChanged": false,
+      "place": "München",
+      "name": "Max-Weber-Platz",
+      "plannedDeparture": "2026-09-23T23:38:00+02:00",
+      "departureDelayInMinutes": -1,
+      "transportTypes": [
+       "UBAHN",
+       "BUS",
+       "TRAM"
+      ],
+      "isViaStop": false,
+      "surroundingPlanLink": "",
+      "occupancy": "UNKNOWN",
+      "hasZoomData": true,
+      "hasOutOfOrderEscalator": false,
+      "hasOutOfOrderElevator": false
+     },
+     {
+      "latitude": 48.13974,
+      "longitude": 11.587899,
+      "stationGlobalId": "de:09162:590",
+      "stationDivaId": 590,
+      "platform": 1,
+      "platformChanged": false,
+      "place": "München",
+      "name": "Lehel",
+      "plannedDeparture": "2026-09-23T23:39:00+02:00",
+      "arrivalDelayInMinutes": -1,
+      "transportTypes": [
+       "UBAHN",
+       "TRAM"
+      ],
+      "isViaStop": false,
+      "surroundingPlanLink": "",
+      "occupancy": "UNKNOWN",
+      "hasZoomData": true,
+      "hasOutOfOrderEscalator": true,
+      "hasOutOfOrderElevator": false
+     }
+    ],
+    "noChangeRequired": false,
+    "line": {
+     "label": "U5",
+     "transportType": "UBAHN",
+     "destination": "Theresienwiese",
+     "trainType": "",
+     "network": "swm",
+     "divaId": "010U5",
+     "sev": false
+    },
+    "pathPolyline": "i_wdHgjyeAgBH}BRoGV_AEaAO_GiBe@Ki@Ia@?o@Do@Ji@No@Ri@X]TOLOL]b@_@j@[l@m@rAe@jASn@Qp@Oz@KbAEx@Ap@Ap@DpB@dA?lA?f@ATCjACj@CbAI~BSnAc@fCoAtFy@vCe@tAaItQcA`Cm@xAk@`B{@vCOj@yAfFm@bC_AhDw@jDy@zD{@bFm@~DcAlHcA~GUlB[lC]rCa@`DGh@AZEx@A^?d@?j@Bn@D`AFn@J|@P~AThARfAZdAj@xAx@hBx@pBnAzCl@`Bj@dBn@~Br@`ChBlGV`APz@PdANfAJjAHrADtA@`B@rIHjE",
+    "exitLetter": "",
+    "distance": 4343.393373219572,
+    "occupancy": "UNKNOWN",
+    "realTime": true,
+    "isCancelled": false
+   }
+  ],
+  "ticketingInformation": {
+   "zones": [
+    0
+   ]
+  },
+  "distance": 4343.393373219572
+ },
+ {
+  "uniqueId": -39599407040991278,
+  "parts": [
+   {
+    "from": {
+     "latitude": 48.128056,
+     "longitude": 11.603709,
+     "stationGlobalId": "de:09162:5",
+     "stationDivaId": 5,
+     "platform": 1,
+     "platformChanged": false,
+     "place": "München",
+     "name": "München, Ostbahnhof",
+     "plannedDeparture": "2026-09-23T23:38:00+02:00",
+     "transportTypes": [
+      "UBAHN",
+      "BUS",
+      "TRAM",
+      "SBAHN",
+      "BAHN"
+     ],
+     "isViaStop": false,
+     "surroundingPlanLink": "",
+     "occupancy": "UNKNOWN",
+     "hasZoomData": true,
+     "hasOutOfOrderEscalator": false,
+     "hasOutOfOrderElevator": false
+    },
+    "to": {
+     "latitude": 48.139348,
+     "longitude": 11.55997,
+     "stationGlobalId": "de:09162:6",
+     "stationDivaId": 6,
+     "platform": 1,
+     "platformChanged": false,
+     "place": "München",
+     "name": "Hauptbahnhof (U, Tram)",
+     "plannedDeparture": "2026-09-23T23:45:00+02:00",
+     "transportTypes": [
+      "UBAHN",
+      "TRAM",
+      "BAHN"
+     ],
+     "isViaStop": false,
+     "surroundingPlanLink": "",
+     "occupancy": "UNKNOWN",
+     "hasZoomData": true,
+     "hasOutOfOrderEscalator": true,
+     "hasOutOfOrderElevator": false
+    },
+    "intermediateStops": [
+     {
+      "latitude": 48.135728,
+      "longitude": 11.598894,
+      "stationGlobalId": "de:09162:580",
+      "stationDivaId": 580,
+      "platform": 1,
+      "platformChanged": false,
+      "place": "München",
+      "name": "Max-Weber-Platz",
+      "plannedDeparture": "2026-09-23T23:40:00+02:00",
+      "transportTypes": [
+       "UBAHN",
+       "BUS",
+       "TRAM"
+      ],
+      "isViaStop": false,
+      "surroundingPlanLink": "",
+      "occupancy": "UNKNOWN",
+      "hasZoomData": true,
+      "hasOutOfOrderEscalator": false,
+      "hasOutOfOrderElevator": false
+     },
+     {
+      "latitude": 48.13974,
+      "longitude": 11.587899,
+      "stationGlobalId": "de:09162:590",
+      "stationDivaId": 590,
+      "platform": 1,
+      "platformChanged": false,
+      "place": "München",
+      "name": "Lehel",
+      "plannedDeparture": "2026-09-23T23:41:00+02:00",
+      "transportTypes": [
+       "UBAHN",
+       "TRAM"
+      ],
+      "isViaStop": false,
+      "surroundingPlanLink": "",
+      "occupancy": "UNKNOWN",
+      "hasZoomData": true,
+      "hasOutOfOrderEscalator": true,
+      "hasOutOfOrderElevator": false
+     }
+    ],
+    "noChangeRequired": false,
+    "line": {
+     "label": "U5",
+     "transportType": "UBAHN",
+     "destination": "Laimer Platz",
+     "trainType": "",
+     "network": "swm",
+     "divaId": "010U5",
+     "sev": false
+    },
+    "pathPolyline": "i_wdHgjyeAgBH}BRoGV_AEaAO_GiBe@Ki@Ia@?o@Do@Ji@No@Ri@X]TOLOL]b@_@j@[l@m@rAe@jASn@Qp@Oz@KbAEx@Ap@Ap@DpB@dA?lA?f@ATCjACj@CbAI~BSnAc@fCoAtFy@vCe@tAaItQcA`Cm@xAk@`B{@vCOj@yAfFm@bC_AhDw@jDy@zD{@bFm@~DcAlHcA~GUlB[lC]rCa@`DGh@AZEx@A^?d@?j@Bn@D`AFn@J|@P~AThARfAZdAj@xAx@hBx@pBnAzCl@`Bj@dBn@~Br@`ChBlGV`APz@PdANfAJjAHrADtA@`B@rIHjE",
+    "exitLetter": "",
+    "distance": 4343.393373219572,
+    "occupancy": "UNKNOWN",
+    "realTime": true,
+    "isCancelled": false
+   }
+  ],
+  "ticketingInformation": {
+   "zones": [
+    0
+   ]
+  },
+  "distance": 4343.393373219572
+ }
+]

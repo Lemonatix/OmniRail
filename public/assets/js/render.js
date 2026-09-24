@@ -32,6 +32,17 @@ function occupancyOf(journey, travelClass) {
   return level > 0 ? { level, label: OCCUPANCY_LABELS[level] || `Stufe ${level}` } : null;
 }
 
+/**
+ * MVV-Tarifzonen lesbar: 0 ist die Zone M, 1 bis 12 die Ringe darum.
+ * [0] → "Zone M", [0, 1, 2] → "Zonen M–2".
+ */
+function zonesLabel(zones) {
+  const z = [...new Set((zones || []).map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (z.length === 0) return 'Tarif der MVV';
+  const name = (n) => (n === 0 ? 'M' : String(n));
+  return z.length === 1 ? `Zone ${name(z[0])}` : `Zonen ${name(z[0])}–${name(z[z.length - 1])}`;
+}
+
 const el = (tag, className, text) => {
   const n = document.createElement(tag);
   if (className) n.className = className;
@@ -235,6 +246,19 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
     }
 
     right.append(el('div', 'journey__price-label', priceOrigin(j.price)));
+
+    // Zubringer in München: für das Stück in der Stadt braucht es ein
+    // eigenes Ticket - außer man hat den Flexpreis mit City-Ticket.
+    if (j.feeder) {
+      const z = el('div', 'journey__price-alt', `+ MVV ${zonesLabel(j.feeder.tariffZones)}`);
+      z.title = 'Für die Fahrt in der Stadt. Im Flexpreis der DB ist das City-Ticket enthalten, '
+        + 'mit Deutschlandticket fährt man ohnehin.';
+      right.append(z);
+    }
+  } else if (j.source === 'mvg') {
+    // Stadtfahrt: die MVG nennt die Tarifzonen, keinen Preis.
+    right.append(el('div', 'journey__price journey__price--none', 'MVV'));
+    right.append(el('div', 'journey__price-label', zonesLabel(j.tariffZones)));
   } else {
     right.append(el('div', 'journey__price journey__price--none', '–'));
     right.append(el('div', 'journey__price-label', 'kein Preis'));
@@ -306,6 +330,12 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
       ausfaelle.length === 1 ? `${trainLabel(ausfaelle[0])} fällt aus` : `${ausfaelle.length} Züge fallen aus`,
       'badge--cancelled'
     );
+  } else if (j.reachable === false) {
+    // HAFAS rechnet jede Verbindung gegen die Echtzeitlage nach. Passt sie
+    // nicht mehr - meist, weil eine Verspätung den Anschluss gekappt hat -,
+    // steht das hier, bevor man sie bucht.
+    const b = add('laut Echtzeit nicht erreichbar', 'badge--cancelled');
+    b.title = 'Nach der aktuellen Verspätungslage ist mindestens ein Anschluss dieser Verbindung nicht zu schaffen.';
   }
 
   // Verspätung, sofern die DB Echtzeitdaten geliefert hat.
@@ -414,10 +444,20 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
   }
 
   // --- Detailbereich ---
+  //
+  // Der Zustand "aufgeklappt" hängt an der Verbindung, nicht am Element: die
+  // Liste wird neu gezeichnet, sobald Ersatzverbindungen oder Tarife
+  // nachgeladen sind, und klappte dabei alles wieder zu - mitten im Lesen.
   const details = el('details', 'journey__details');
+  details.open = Boolean(j._detailsOpen);
+  details.addEventListener('toggle', () => { j._detailsOpen = details.open; });
   details.append(el('summary', null, 'Streckenverlauf und Details'));
   details.append(renderLegs(j, entry, state, liveCtl));
   card.append(details);
+
+  // --- Alle Tarife der DB ---
+  const fares = renderFares(j, state, liveCtl);
+  if (fares) card.append(fares);
 
   // --- Buchen: Shops der berührten Länder, Startland zuerst ---
   const shops = j.shops || [];
@@ -448,6 +488,131 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
 }
 
 /**
+ * Alle Tarife einer Verbindung, zum Aufklappen.
+ *
+ * Die Liste zeigt den günstigsten Preis - meist einen Super Sparpreis mit
+ * Zugbindung, ohne dass das dasteht. Hier stehen die übrigen daneben, mit
+ * ihren Bedingungen und dem Preis einer Sitzplatzreservierung. Geladen wird
+ * erst beim Aufklappen: die DB-Antwort ist groß, und die meisten schauen es
+ * sich für die meisten Verbindungen nie an.
+ */
+function renderFares(journey, state, actions) {
+  if (!journey.dbRecon || !actions?.loadOffers) return null;
+
+  const box = el('details', 'fares');
+  const sum = el('summary', 'fares__summary');
+  sum.append(el('span', 'fares__title', 'Tarife und Bedingungen'));
+  sum.append(el('span', 'fares__hint', 'Spar-, Flexpreis, Reservierung'));
+  box.append(sum);
+  const body = el('div', 'fares__body', 'Lade Tarife …');
+  box.append(body);
+
+  let geladen = false;
+  const laden = async () => {
+    if (geladen) return;
+    geladen = true;
+    try {
+      const res = await actions.loadOffers(journey);
+      body.replaceChildren(...faresBody(res, state, journey));
+    } catch (err) {
+      geladen = false; // beim nächsten Aufklappen neu versuchen
+      body.replaceChildren(el('p', 'fares__note',
+        `Die DB liefert die Tarife gerade nicht (${err.message}). Zuklappen und wieder aufklappen versucht es erneut.`));
+    }
+  };
+
+  box.open = Boolean(journey._faresOpen);
+  box.addEventListener('toggle', () => {
+    journey._faresOpen = box.open;
+    if (box.open) laden();
+  });
+  if (box.open) laden();
+  return box;
+}
+
+function faresBody(res, state, journey) {
+  const out = [];
+  const geld = (v, cur) => Number(v).toLocaleString('de-DE', { style: 'currency', currency: cur || 'EUR' });
+  const fares = res?.fares || [];
+
+  if (fares.length === 0) {
+    out.push(el('p', 'fares__note', 'Für diese Verbindung nennt die DB keine Tarife — '
+      + 'sie verkauft sie vermutlich nicht.'));
+    return out;
+  }
+
+  // Die gewählte Klasse zuerst, die andere als Vergleich darunter.
+  const erste = state.travelClass === 1 ? 1 : 2;
+  for (const klasse of [erste, erste === 1 ? 2 : 1]) {
+    const rows = fares.filter((f) => f.class === klasse);
+    if (rows.length === 0) continue;
+    out.push(el('p', 'fares__class', `${klasse}. Klasse`));
+    const list = el('ul', 'fares__list');
+    for (const f of rows) {
+      const li = el('li', 'fares__row');
+      li.append(el('span', 'fares__name', f.name));
+      li.append(el('span', 'fares__price', geld(f.amount, f.currency)));
+      const bed = (f.conditions || []).map((c) => c.text).filter(Boolean);
+      if (bed.length) li.append(el('span', 'fares__cond', bed.join(' · ')));
+      if (f.discountNote) li.append(el('span', 'fares__disc', f.discountNote));
+      list.append(li);
+    }
+    out.push(list);
+  }
+
+  const seat = res.seat;
+  if (seat) {
+    const text = seat.included ? 'Sitzplatzreservierung ist inklusive.'
+      : !seat.available ? 'Sitzplatzreservierung: ausgebucht oder nicht möglich.'
+      : `Sitzplatz reservieren: ${geld(seat.amount, seat.currency)}`
+        + (seat.required ? ' — Reservierungspflicht.' : '.');
+    out.push(el('p', 'fares__seat', text));
+  }
+
+  // Was eine BahnCard hier brächte - die DB rechnet es selbst vor.
+  const mitBc = (res.withBahnCard || []).filter((f) => f.class === erste);
+  if (mitBc.length > 0) {
+    const ab = Math.min(...mitBc.map((f) => f.amount));
+    const probe = (res.bahncard || []).map((b) => `${b.name} ${geld(b.amount, b.currency)}`);
+    out.push(el('p', 'fares__bc',
+      `Mit BahnCard ab ${geld(ab, mitBc[0].currency)}`
+      + (probe.length ? ` (zum Ausprobieren: ${probe.join(', ')})` : '') + '.'));
+  }
+
+  // Eigene Abos, die die DB nicht kennt, stecken in diesen Preisen nicht.
+  const fremd = journey.price?.source === 'db+abo';
+  out.push(el('p', 'fares__source',
+    'Preise der DB für die ganze Verbindung, Stand jetzt. Spar- und Super Sparpreise sind '
+    + 'kontingentiert und können beim Buchen schon weg sein.'
+    + (fremd ? ' Halbtax, GA, Vorteilscard und KlimaTicket sind hier nicht eingerechnet.' : '')));
+  return out;
+}
+
+/**
+ * Eine Hinweiszeile, die auf zwei Zeilen gekürzt ist und sich per Tipp
+ * ganz öffnet - für lange Fremdtexte wie Aufzugsmeldungen.
+ */
+function expandableNote(cls, label, text) {
+  const n = el('div', cls);
+  if (label) n.append(el('span', `${cls.split(' ')[0]}-label`, label));
+  n.append(el('span', `${cls.split(' ')[0]}-text`, text));
+  n.title = text;
+  n.tabIndex = 0;
+  n.setAttribute('role', 'button');
+  n.setAttribute('aria-expanded', 'false');
+  const umschalten = (e) => {
+    e.stopPropagation(); // nicht zugleich die Verbindung auswählen
+    const offen = n.classList.toggle('is-open');
+    n.setAttribute('aria-expanded', String(offen));
+  };
+  n.addEventListener('click', umschalten);
+  n.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); umschalten(e); }
+  });
+  return n;
+}
+
+/**
  * "Wenn du den Anschluss nicht kriegst": die nächsten Verbindungen ab dem
  * Umsteigebahnhof, jede davon übernehmbar.
  *
@@ -460,23 +625,34 @@ function renderCard(entry, index, marks, state, onSelect, liveCtl) {
 function renderFallback(journey, leg, actions) {
   if (!leg.fallbackState) return null;
 
+  // Beim Ausfall ist der Ersatz die Hauptsache, nicht die Absicherung —
+  // deshalb andere Worte und eine eigene, deutlichere Kennzeichnung.
+  const ausfall = Boolean(leg.cancelled);
+
   if (leg.fallbackState === 'loading') {
-    return el('div', 'leg__fallback leg__fallback--pending', 'Suche spätere Anschlüsse …');
+    return el('div', 'leg__fallback leg__fallback--pending',
+      ausfall ? 'Suche Ersatz …' : 'Suche spätere Anschlüsse …');
   }
 
   const options = leg.fallbacks || [];
   if (options.length === 0) {
-    return el('div', 'leg__fallback leg__fallback--none',
-      'Kein späterer Anschluss gefunden — diese Verbindung hängt am Umstieg.');
+    return el('div', 'leg__fallback leg__fallback--none', ausfall
+      ? 'Kein Ersatz gefunden. Neu suchen mit späterer Abfahrt hilft vielleicht weiter.'
+      : 'Kein späterer Anschluss gefunden — diese Verbindung hängt am Umstieg.');
   }
 
-  const box = el('div', 'leg__fallback');
-  box.append(el('span', 'leg__fallback-label', 'Stattdessen'));
+  const box = el('div', 'leg__fallback' + (ausfall ? ' leg__fallback--ersatz' : ''));
+  box.append(el('span', 'leg__fallback-label', ausfall ? 'Ersatz' : 'Stattdessen'));
 
   const list = el('div', 'leg__fallback-list');
   for (const f of options) {
     const parts = [];
-    if (f.trains?.length) parts.push(f.trains.join(' · '));
+    // Aus den Abschnitten beschriften, mit derselben Regel wie überall sonst
+    // (trainLabel). Die Beschriftung des Servers kennt die Gattungsauflösung
+    // nicht und schrieb "DB S5" für die Münchner S-Bahn.
+    const zuege = (f.legs || []).filter((l) => l.mode === 'train').map(trainLabel);
+    const namen = zuege.length ? zuege : (f.trains || []);
+    if (namen.length) parts.push(namen.join(' · '));
     if (typeof f.changes === 'number') {
       parts.push(f.changes === 0 ? 'direkt' : `${f.changes} Umstieg${f.changes > 1 ? 'e' : ''}`);
     }
@@ -486,6 +662,9 @@ function renderFallback(journey, leg, actions) {
     btn.append(el('span', 'leg__alt-times',
       `${formatTime(f.departure)} → ${formatTime(f.arrival)}`));
     btn.append(el('span', 'leg__alt-meta', parts.join(' · ')));
+    // Überbrückt nur das ausgefallene Stück, der Rest der Reise bleibt —
+    // das ist die gute Nachricht und gehört dazugesagt.
+    if (f.bridged) btn.append(el('span', 'leg__alt-note', 'weiter wie geplant'));
 
     // Wie viel später man ankommt, ist die eigentlich interessante Zahl.
     const lost = lateBy(leg.journeyArrival, f.arrival);
@@ -603,7 +782,13 @@ function renderTransferPlan(journey, leg, actions) {
     }
   };
 
-  box.addEventListener('toggle', () => { if (box.open) laden(); });
+  // Offen bleibt offen, auch wenn die Liste neu gezeichnet wird.
+  box.open = Boolean(leg._xferOpen);
+  box.addEventListener('toggle', () => {
+    leg._xferOpen = box.open;
+    if (box.open) laden();
+  });
+  if (box.open) laden();
 
   return box;
 }
@@ -708,12 +893,33 @@ function transferPlanBody(res, fromTrack, toTrack, stationName) {
       fromTrack: String(fromTrack || ''),
       toTrack: String(toTrack || ''),
       trackPoints: res?.trackPoints || {},
+      connectors: res?.connectors || [],
     });
   });
 
+  // Legende, sobald Treppen & Co. im Plan stehen.
+  if ((res?.connectors || []).length > 0) {
+    const leg = el('p', 'xfer__legend');
+    const item = (cls, zeichen, text) => {
+      const s = el('span', `xfer__legend-item ${cls}`);
+      s.append(el('span', 'xfer__legend-sym', zeichen), document.createTextNode(text));
+      return s;
+    };
+    leg.append(
+      item('is-steps', '┅', 'Treppe'),
+      item('is-escalator', '➔', 'Rolltreppe, Pfeil = Fahrtrichtung'),
+      item('is-elevator', '⇅', 'Aufzug'),
+      el('span', 'xfer__legend-note', 'Die Zahl daneben: die Ebene, zu der es führt.'),
+    );
+    out.push(leg);
+  }
+
   out.push(el('p', 'xfer__source',
-    'Bahnhofsplan aus OpenStreetMap. Gezeigt ist die Lage der Bahnsteige, nicht '
-    + 'der Weg dorthin — den findet man im Bahnhof besser als jede Karte.'));
+    (res?.connectors || []).length > 0
+      ? 'Bahnhofsplan aus OpenStreetMap: Bahnsteige, Treppen, Rolltreppen und Aufzüge. '
+        + 'Ein berechneter Laufweg ist es nicht — die Gänge dazwischen sind in OSM zu lückenhaft.'
+      : 'Bahnhofsplan aus OpenStreetMap. Gezeigt ist die Lage der Bahnsteige, nicht '
+        + 'der Weg dorthin — den findet man im Bahnhof besser als jede Karte.'));
   return out;
 }
 
@@ -740,6 +946,17 @@ function appendLegTime(line, plan, real) {
 function renderLegs(journey, entry, state, actions) {
   const wrap = el('div', 'legs');
 
+  // Aufzugs- und Barrierefreiheitsmeldungen am Ein- und Ausstieg. Ein
+  // Umsteigebahnhof ist Ausstieg des einen und Einstieg des nächsten Zuges -
+  // die Meldung soll trotzdem nur einmal dastehen.
+  const gezeigt = new Set();
+  const zugang = (leg, at) => (leg.stationNotes || [])
+    .filter((n) => n.at === at && n.text && !gezeigt.has(n.text))
+    .map((n) => {
+      gezeigt.add(n.text);
+      return expandableNote('leg__access', 'Zugang', n.text);
+    });
+
   for (const leg of journey.legs) {
     // Für den Vergleich "wie viel später komme ich an" in renderFallback.
     leg.journeyArrival = journey.arrival;
@@ -765,6 +982,9 @@ function renderLegs(journey, entry, state, actions) {
     if (leg.cancelled) {
       row.classList.add('leg--cancelled');
       row.append(el('div', 'leg__cancelled', 'Dieser Zug fällt aus.'));
+      // Gleich darunter, was man stattdessen nimmt — übernehmbar.
+      const ersatz = renderFallback(journey, leg, actions);
+      if (ersatz) row.append(ersatz);
     }
 
     // Umsteigezeit vor diesem Zug, wenn sie knapp ist.
@@ -778,8 +998,9 @@ function renderLegs(journey, entry, state, actions) {
 
       // Bei sehr knappen Umstiegen die Alternativen gleich mitliefern:
       // die Frage ist nicht nur, ob man es schafft, sondern auch, ob man
-      // lieber gleich anders fährt.
-      const fb = renderFallback(journey, leg, actions);
+      // lieber gleich anders fährt. Fällt der Zug ohnehin aus, steht der
+      // Ersatz schon oben — nicht zweimal.
+      const fb = leg.cancelled ? null : renderFallback(journey, leg, actions);
       if (fb) row.append(fb);
     }
 
@@ -798,6 +1019,7 @@ function renderLegs(journey, entry, state, actions) {
     line1.append(el('span', 'leg__station', leg.from?.name || '?'));
     if (leg.from?.platform) line1.append(el('span', 'leg__platform', `Gl. ${leg.from.platform}`));
     row.append(line1);
+    row.append(...zugang(leg, 'from'));
 
     const info = el('div', 'leg__train');
     info.append(el('span', 'leg__cat', trainLabel(leg)));
@@ -840,6 +1062,17 @@ function renderLegs(journey, entry, state, actions) {
     }
     row.append(info);
 
+    // Ausstattung laut DB. Was die Fahrt verhindern kann (Reservierungs-
+    // pflicht, DB-Fahrscheine gelten nicht), steht zuerst und farbig.
+    const amen = [...(leg.amenities || [])].sort((a, b) => Number(b.important) - Number(a.important));
+    if (amen.length > 0) {
+      const box = el('div', 'leg__amenities');
+      for (const a of amen) {
+        box.append(el('span', 'leg__amenity' + (a.important ? ' leg__amenity--warn' : ''), a.label));
+      }
+      row.append(box);
+    }
+
     if (leg.dTicket) {
       row.append(el('div', 'leg__stops-count', leg.dTicket));
     }
@@ -878,6 +1111,7 @@ function renderLegs(journey, entry, state, actions) {
     line2.append(el('span', 'leg__station', leg.to?.name || '?'));
     if (leg.to?.platform) line2.append(el('span', 'leg__platform', `Gl. ${leg.to.platform}`));
     row.append(line2);
+    row.append(...zugang(leg, 'to'));
 
     wrap.append(row);
   }

@@ -449,6 +449,8 @@ final class OebbHafas
      * @param string $time    HH:MM
      * @param bool   $arrival true = $time ist Ankunftszeit
      * @param ?string $scroll  Blätter-Kontext aus einer früheren Antwort
+     * @param bool   $realtime Mit der Echtzeitlage routen statt mit dem Fahrplan,
+     *                         siehe call()
      * @return array{ok:bool,error:?string,data:array,scrollF:?string,scrollB:?string}
      */
     public function journeys(
@@ -462,7 +464,8 @@ final class OebbHafas
         array $viaIds = [],
         int $productMask = 0,
         ?int $minChangeMin = null,
-        ?string $scroll = null
+        ?string $scroll = null,
+        bool $realtime = false
     ): array {
         $req = [
             'depLocL'     => [['type' => 'S', 'lid' => 'A=1@L=' . $fromId . '@']],
@@ -520,7 +523,7 @@ final class OebbHafas
             }
         }
 
-        $res = $this->call('TripSearch', $req);
+        $res = $this->call('TripSearch', $req, $realtime ? ['rtMode' => 'REALTIME'] : []);
         if (!$res['ok']) {
             return $res + ['scrollF' => null, 'scrollB' => null];
         }
@@ -545,6 +548,108 @@ final class OebbHafas
             'scrollF' => isset($body['outCtxScrF']) ? (string) $body['outCtxScrF'] : null,
             // Und derselbe Kontext rückwärts - frühere Abfahrten.
             'scrollB' => isset($body['outCtxScrB']) ? (string) $body['outCtxScrB'] : null,
+        ];
+    }
+
+    /**
+     * Abfahrts- oder Ankunftstafel eines Bahnhofs.
+     *
+     * Dieselben Namensregeln wie bei der Verbindungssuche, damit eine S-Bahn
+     * auf der Tafel genauso heißt wie in der Trefferliste ("S1", nicht "DB
+     * S1 (Zug-Nr. 6934)"). Jeder Eintrag trägt seine jid - ein Tipp auf die
+     * Zeile lädt den Zuglauf über traindetails.
+     *
+     * Für Ankünfte nennt HAFAS nur das Fahrtziel, nicht den Startbahnhof;
+     * `direction` ist deshalb bei beiden Tafeln das Ziel des Zuges.
+     *
+     * @return array{ok:bool,error:?string,data:array,station:?array}
+     */
+    public function stationBoard(
+        string $eva,
+        string $date,
+        string $time,
+        bool $arrivals = false,
+        int $durationMin = 60,
+        int $max = 40,
+        int $productMask = 0
+    ): array {
+        $req = [
+            'type'   => $arrivals ? 'ARR' : 'DEP',
+            'date'   => str_replace('-', '', $date),
+            'time'   => str_replace(':', '', $time) . '00',
+            'stbLoc' => ['type' => 'S', 'lid' => 'A=1@L=' . $eva . '@'],
+            'maxJny' => $max,
+            'dur'    => $durationMin,
+        ];
+        if ($productMask > 0) {
+            $req['jnyFltrL'] = [['type' => 'PROD', 'mode' => 'INC', 'value' => $productMask]];
+        }
+
+        $res = $this->call('StationBoard', $req);
+        if (!$res['ok']) {
+            return $res + ['station' => null];
+        }
+
+        $body   = $res['data']['res'] ?? [];
+        $common = $body['common'] ?? [];
+        $locL   = $common['locL'] ?? [];
+        $prodL  = $common['prodL'] ?? [];
+        $a      = $arrivals ? 'a' : 'd';
+
+        $out = [];
+        foreach (($body['jnyL'] ?? []) as $j) {
+            $stb  = $j['stbStop'] ?? [];
+            $prod = $prodL[$stb[$a . 'ProdX'] ?? $j['prodX'] ?? -1] ?? [];
+            $ctx  = $prod['prodCtx'] ?? [];
+            $name = self::productName($prod);
+            $day  = (string) ($j['date'] ?? '');
+
+            $planned = $this->hafasTime($day, $stb[$a . 'TimeS'] ?? null, $stb[$a . 'TZOffset'] ?? null);
+            if ($planned === null) {
+                continue;
+            }
+            $real = $this->hafasTime($day, $stb[$a . 'TimeR'] ?? null, $stb[$a . 'TZOffset'] ?? null);
+            $pltS = $stb[$a . 'PltfS']['txt'] ?? null;
+            $pltR = $stb[$a . 'PltfR']['txt'] ?? null;
+
+            $out[] = [
+                'jid'           => (string) ($j['jid'] ?? ''),
+                'category'      => trim((string) ($ctx['catOut'] ?? '')),
+                'categoryName'  => trim((string) ($ctx['catOutL'] ?? '')),
+                'line'          => self::lineName($ctx),
+                'trainNumber'   => self::trainNumber($ctx, $name),
+                'name'          => $name,
+                'direction'     => trim((string) ($j['dirTxt'] ?? '')),
+                'planned'       => $planned,
+                'real'          => $real,
+                'delay'         => $real !== null ? $this->diffMinutes($planned, $real) : null,
+                'platform'      => $pltR ?? $pltS,
+                'platformChanged' => $pltR !== null && $pltS !== null && $pltR !== $pltS,
+                'cancelled'     => !empty($stb[$a . 'Cncl']) || !empty($j['isCncl']),
+                'source'        => 'hafas',
+            ];
+        }
+
+        // Der angefragte Bahnhof, nicht der erste Ort der Antwort - das ist
+        // in München "München Hbf (tief)", der S-Bahnhof darunter.
+        $loc = null;
+        foreach ($locL as $l) {
+            if ((string) ($l['extId'] ?? '') === $eva) {
+                $loc = $l;
+                break;
+            }
+        }
+        $loc ??= $locL[0] ?? null;
+        return [
+            'ok'      => true,
+            'error'   => null,
+            'data'    => $out,
+            'station' => $loc === null ? null : [
+                'id'   => (string) ($loc['extId'] ?? $eva),
+                'name' => (string) ($loc['name'] ?? ''),
+                'lat'  => isset($loc['crd']['y']) ? $loc['crd']['y'] / 1000000 : null,
+                'lon'  => isset($loc['crd']['x']) ? $loc['crd']['x'] / 1000000 : null,
+            ],
         ];
     }
 
@@ -912,7 +1017,12 @@ final class OebbHafas
                     'departure'    => $depTime,
                     'arrival'      => $arrTime,
                     'durationMin'  => $this->diffMinutes($depTime, $arrTime),
-                    'cancelled'    => (bool) ($jny['isCncl'] ?? false),
+                    // Auch der Zug, der zwar fährt, aber am EIGENEN Ein- oder
+                    // Ausstieg nicht hält, fällt für diese Reise aus. Genau so
+                    // sieht eine gesperrte Stammstrecke aus: die S-Bahn endet
+                    // vorzeitig, und am Marienplatz steht dCncl, nicht isCncl.
+                    'cancelled'    => (bool) ($jny['isCncl'] ?? false)
+                        || !empty($dep['dCncl']) || !empty($arr['aCncl']),
                 ];
             } else {
                 // Alles außer einer Fahrt ist ein Weg zu Fuß: WALK, TRSF,
@@ -963,6 +1073,10 @@ final class OebbHafas
             'durationMin' => $this->hafasDuration((string) ($con['dur'] ?? '')) ?: $this->diffMinutes($depAll, $arrAll),
             'changes'     => (int) ($con['chg'] ?? max(0, count($trainLegs) - 1)),
             'legs'        => $legs,
+            // HAFAS rechnet jede Verbindung gegen die Echtzeitlage nach und
+            // markiert, was so nicht mehr fahrbar ist - meist ein Anschluss,
+            // den eine Verspätung schon gekappt hat. Stand bisher nirgends.
+            'reachable'   => empty($con['isNotRdbl']),
             'countries'   => array_keys($countries),
             'bookingUrl'  => $bookingUrl,
             'price'       => null, // wird später von DB-Provider oder Fares.php gefüllt
@@ -1011,7 +1125,7 @@ final class OebbHafas
      *
      * @return array<int,array{0:float,1:float}>
      */
-    private function decodePolyline(string $enc): array
+    public static function decodePolyline(string $enc): array
     {
         $points = [];
         $index  = 0;
@@ -1174,8 +1288,22 @@ final class OebbHafas
 
     // ------------------------------------------------------------------
 
-    /** @return array{ok:bool,error:?string,data:array} */
-    private function call(string $method, array $req): array
+    /**
+     * Eine Anfrage an den HAFAS-Server.
+     *
+     * $cfg ergänzt die Dienstkonfiguration. Wichtig ist dort vor allem
+     * rtMode: 'REALTIME' lässt HAFAS mit der Echtzeitlage routen, statt mit
+     * dem Fahrplan. Verbindungen, deren Anschluss eine Verspätung schon
+     * gekappt hat, fallen dann weg, und ausgefallene Züge werden umfahren.
+     * Nachgemessen, was der ÖBB-Server annimmt: rtMode steht in `cfg`, nicht
+     * in `req` (dort: "Parser error"), und von den Werten, die andere
+     * HAFAS-Server kennen, gehen SERVER_DEFAULT, REALTIME und FULL - HYBRID
+     * nicht.
+     *
+     * @param array<string,mixed> $cfg
+     * @return array{ok:bool,error:?string,data:array}
+     */
+    private function call(string $method, array $req, array $cfg = []): array
     {
         $payload = [
             'auth'    => $this->cfg['auth'],
@@ -1183,7 +1311,7 @@ final class OebbHafas
             'ver'     => $this->cfg['ver'],
             'lang'    => $this->cfg['lang'],
             'svcReqL' => [[
-                'cfg'  => ['polyEnc' => 'GPA'],
+                'cfg'  => ['polyEnc' => 'GPA'] + $cfg,
                 'meth' => $method,
                 'req'  => $req,
             ]],

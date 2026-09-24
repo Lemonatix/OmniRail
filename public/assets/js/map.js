@@ -799,9 +799,21 @@ export class RouteMap {
   /** Die Zeile unter der Karte — sie sagt, was hier zu sehen und zu tun ist. */
   hintText() {
     if (this.mode === 'station') {
-      return this.levelsPresent().length > 1
-        ? 'Ziehen und zoomen. Mit ▲ ▼ die Ebene wechseln — was woanders liegt, ist blass.'
-        : 'Ziehen zum Verschieben, Scrollen zum Zoomen.';
+      if (this.levelsPresent().length < 2) return 'Ziehen zum Verschieben, Scrollen zum Zoomen.';
+      const z = this.transferLevels();
+      const L = this.level;
+      if (z && L != null && (this.station?.connectors || []).length > 0) {
+        // Beide Gleise auf derselben Ebene, aber nicht am selben Bahnsteig:
+        // dann führt der Weg fast immer über die Unterführung.
+        if (z.target === L && z.from === L) {
+          return 'Beide Gleise liegen auf dieser Ebene — der Weg führt über Treppe, '
+            + 'Rolltreppe oder Aufzug in die Unter- bzw. Überführung. Mit ▲ ▼ die Ebene wechseln.';
+        }
+        if (z.target === L) return 'Ebene des Abfahrtsgleises. Mit ▲ ▼ die Ebene wechseln.';
+        return `Das Abfahrtsgleis liegt auf Ebene ${levelName(z.target)} — hervorgehoben ist, `
+          + `was von hier nach ${z.target < L ? 'unten' : 'oben'} führt. Mit ▲ ▼ die Ebene wechseln.`;
+      }
+      return 'Ziehen und zoomen. Mit ▲ ▼ die Ebene wechseln — was woanders liegt, ist blass.';
     }
     if (this.mode === 'works') {
       if (this.works.length === 0) return 'Zurzeit sind keine größeren Baustellen gemeldet.';
@@ -870,18 +882,68 @@ export class RouteMap {
   defaultLevel() {
     const st = this.station;
     if (!st) return null;
+    // MIT TREPPEN UND AUFZÜGEN beginnt der Plan dort, wo man aussteigt: dort
+    // steht hervorgehoben, welcher Aufgang Richtung Abfahrtsgleis führt, und
+    // ▲ ▼ folgt dem Weg Ebene für Ebene. Ohne sie gibt es auf der
+    // Ankunftsebene nichts zu sehen, was weiterhilft.
+    if ((st.connectors || []).length > 0 && st.from?.level != null
+      && st.to?.level != null && st.from.level !== st.to.level) {
+      return st.from.level;
+    }
     if (st.to?.level != null) return st.to.level;
     if (st.from?.level != null) return st.from.level;
-    return this.levelsPresent()[0] ?? null;
+    const ebenen = this.levelsPresent();
+    // Gleise ohne Ebene, aber Treppen mit: die Gleise liegen dann fast
+    // immer auf 0, und dort beginnt der Plan.
+    if (ebenen.includes(0)) return 0;
+    return ebenen[0] ?? null;
   }
 
-  /** Alle Ebenen, die im Bild vorkommen, von oben nach unten. */
+  /**
+   * Alle Ebenen, die im Bild vorkommen, von oben nach unten.
+   *
+   * Dazu gehören auch die Ebenen, zu denen nur Treppen und Aufzüge führen:
+   * das Untergeschoss zwischen Gleis 8 (Ebene 0) und Gleis 33 (Ebene −4) in
+   * Zürich hat keinen einzigen Bahnsteig, ist aber genau der Weg.
+   */
   levelsPresent() {
     const st = this.station;
     if (!st) return [];
     const set = new Set();
     for (const p of st.platforms || []) if (p.level != null) set.add(p.level);
+    const [lo, hi] = this.levelRange();
+    for (const c of st.connectors || []) {
+      for (const lv of c.levels || []) if (lv >= lo && lv <= hi) set.add(lv);
+    }
     return [...set].sort((a, b) => b - a);
+  }
+
+  /**
+   * Welche Ebenen gehören zum Bahnhof?
+   *
+   * Im Umkreis stehen auch Bürohäuser mit Aufzügen bis in den fünften
+   * Stock - an Zürich HB kamen so die Ebenen +1 bis +5 in den Umschalter,
+   * auf denen es nichts zu sehen gibt. Gezählt wird deshalb von zwei Ebenen
+   * unter dem tiefsten bis eine über dem höchsten Bahnsteig. Kennt OSM gar
+   * keine Bahnsteigebenen - an deutschen Bahnhöfen häufig -, gelten die
+   * Gleise als Ebene 0.
+   */
+  levelRange() {
+    const lv = (this.station?.platforms || []).map((p) => p.level).filter((v) => v != null);
+    if (lv.length === 0) return [-3, 1];
+    return [Math.min(...lv) - 2, Math.max(...lv) + 1];
+  }
+
+  /**
+   * Wohin geht es? Die Ebene des Abfahrtsgleises - und von der des
+   * Ankunftsgleises aus gesehen die Richtung dorthin.
+   *
+   * @returns {?{target:number, from:?number}}
+   */
+  transferLevels() {
+    const st = this.station;
+    const target = st?.to?.level ?? null;
+    return target == null ? null : { target, from: st?.from?.level ?? null };
   }
 
   /** Der Umschalter am Bildrand: eine Ebene hoch, eine tiefer. */
@@ -922,6 +984,7 @@ export class RouteMap {
     this.level = next;
     this.render();
     this.updateLevelControl();
+    this.updateHint();
   }
 
   updateLevelControl() {
@@ -963,6 +1026,9 @@ export class RouteMap {
     const zeigeEbene = this.level;
     const aufEbene = (lv) => zeigeEbene == null || lv == null || lv === zeigeEbene;
 
+    // Zuerst die Verbinder, damit die Gleispunkte obenauf liegen.
+    this.renderConnectors(g, w, h, toPx);
+
     for (const gl of this.gleispunkte()) {
       const [x, y] = toPx(gl.pos);
       if (x < -40 || y < -40 || x > w + 40 || y > h + 40) continue;
@@ -995,6 +1061,99 @@ export class RouteMap {
     }
 
     svg.append(g);
+  }
+
+  /**
+   * Treppen, Rolltreppen und Aufzüge der gezeigten Ebene.
+   *
+   * KEIN LAUFWEG, sondern die Stellen, an denen es die Ebene wechselt —
+   * Tatsachen aus OSM statt einer Rechnung über unvollständig kartierte
+   * Gänge. Das ist es auch, was die Bahnen selbst am Bahnsteig zeigen: wo
+   * der nächste Aufgang ist.
+   *
+   * HERVORGEHOBEN sind die, die Richtung Abfahrtsgleis führen: liegt es
+   * tiefer, alles, was von hier nach unten geht, und umgekehrt. Auf der
+   * Ebene des Abfahrtsgleises selbst ist man angekommen — dort tritt alles
+   * zurück. An jedem Verbinder steht, wohin er führt ("−2").
+   */
+  renderConnectors(g, w, h, toPx) {
+    const liste = this.station?.connectors || [];
+    const L = this.level;
+    if (liste.length === 0 || L == null) return;
+
+    const ziel = this.transferLevels();
+    const richtung = ziel && ziel.target !== L ? Math.sign(ziel.target - L) : 0;
+    const svgEl = (tag, attrs, text) => {
+      const n = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const imBild = ([x, y]) => x > -20 && y > -20 && x < w + 20 && y < h + 20;
+    const NAMEN = { elevator: 'Aufzug', escalator: 'Rolltreppe', steps: 'Treppe' };
+
+    // Beschriftung nur, solange es übersichtlich bleibt.
+    const sichtbar = liste.filter((c) => (c.levels || []).includes(L) && imBild(toPx(c.pos)));
+    const beschriften = sichtbar.length <= 30;
+
+    const [lo, hi] = this.levelRange();
+    for (const c of sichtbar) {
+      const andere = c.levels.filter((lv) => lv !== L && lv >= lo && lv <= hi);
+      const nuetzlich = richtung !== 0 && andere.some((lv) => Math.sign(lv - L) === richtung);
+      const cls = `map__conn map__conn--${c.type}${nuetzlich ? ' is-useful' : ''}`;
+      const titel = `${NAMEN[c.type] || 'Verbinder'} · Ebene ${c.levels.map(levelName).join(' ↔ ')}`
+        + (c.wheelchair === false ? ' · nicht rollstuhlgerecht' : '');
+
+      const [x, y] = toPx(c.pos);
+      const gruppe = svgEl('g', { class: cls });
+      gruppe.append(svgEl('title', {}, titel));
+
+      if (c.type === 'elevator' || !(c.line?.length === 2)) {
+        gruppe.append(svgEl('rect', {
+          x: (x - 6).toFixed(1), y: (y - 6).toFixed(1), width: 12, height: 12, rx: 2,
+          class: 'map__conn-box',
+        }));
+        gruppe.append(svgEl('text', {
+          x: x.toFixed(1), y: (y + 3.5).toFixed(1), 'text-anchor': 'middle', class: 'map__conn-glyph',
+        }, c.type === 'elevator' ? '⇅' : '≡'));
+      } else {
+        const [a, b] = c.line.map((pt) => toPx(pt));
+        gruppe.append(svgEl('line', {
+          x1: a[0].toFixed(1), y1: a[1].toFixed(1), x2: b[0].toFixed(1), y2: b[1].toFixed(1),
+          class: 'map__conn-line',
+        }));
+        // Pfeil in Fahrtrichtung - nur bei Rolltreppen mit fester Richtung.
+        const pfeil = (von, nach) => {
+          const dx = nach[0] - von[0];
+          const dy = nach[1] - von[1];
+          const len = Math.hypot(dx, dy);
+          if (len < 4) return;
+          const ux = dx / len;
+          const uy = dy / len;
+          const s = 5;
+          const pts = [
+            [nach[0], nach[1]],
+            [nach[0] - ux * s * 1.6 - uy * s, nach[1] - uy * s * 1.6 + ux * s],
+            [nach[0] - ux * s * 1.6 + uy * s, nach[1] - uy * s * 1.6 - ux * s],
+          ];
+          gruppe.append(svgEl('polygon', {
+            points: pts.map((q) => q.map((v) => v.toFixed(1)).join(',')).join(' '),
+            class: 'map__conn-arrow',
+          }));
+        };
+        if (c.type === 'escalator' && c.dir === 'forward') pfeil(a, b);
+        if (c.type === 'escalator' && c.dir === 'backward') pfeil(b, a);
+      }
+
+      // Wohin führt er? Bei einem Aufzug über fünf Ebenen die äußersten.
+      if (beschriften && andere.length > 0) {
+        const ziele = andere.length > 2 ? [andere[0], andere[andere.length - 1]] : andere;
+        gruppe.append(svgEl('text', {
+          x: (x + 9).toFixed(1), y: (y - 7).toFixed(1), class: 'map__conn-tag',
+        }, ziele.map(levelName).join('/')));
+      }
+      g.append(gruppe);
+    }
   }
 
   /**

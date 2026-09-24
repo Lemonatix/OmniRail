@@ -38,8 +38,20 @@ async function call(action, params = {}, { signal } = {}) {
     throw new Error(data.error || `Fehler ${res.status}`);
   }
 
+  // Ohne Netz liefert der Service Worker die letzte Antwort - das soll die
+  // App wissen, damit sie den Stand nicht als aktuell ausgibt.
+  if (res.headers.get('X-From-Cache') === '1') data.fromCache = true;
+  // Auch der Offline-Hinweis oben hängt daran: "navigator.onLine" sagt nur,
+  // ob das Gerät ein Netz hat, nicht, ob der Server erreichbar ist.
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('omnirail:net', { detail: { fromCache: Boolean(data.fromCache) } }));
+  }
+
   return data;
 }
+
+/** Koordinate auf fünf Stellen (rund ein Meter), leer wenn unbekannt. */
+const coord = (v) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(5) : '');
 
 export const api = {
   health: (opts) => call('health', {}, opts),
@@ -58,6 +70,13 @@ export const api = {
   trainDetails: (jid, opts) => call('traindetails', { jid }, opts),
 
   /**
+   * Zuglauf aus einer anderen Quelle als HAFAS: `{ db: journeyId }` für
+   * Abschnitte mit DB-Kennung, oder `{ mvgFrom, mvgTo, line, dep, arr }`
+   * für Abschnitte aus der MVG-Suche. Antwort im selben Format.
+   */
+  trainRun: (params, opts) => call('traindetails', params, opts),
+
+  /**
    * Nächste Verbindungen ab einem Umsteigebahnhof.
    *
    * Zwei Verwendungen: ein Treffer als Rückfallebene an der Karte, drei als
@@ -71,6 +90,43 @@ export const api = {
       limit: params.limit || 1,
       discounts: (params.discounts || []).join(','),
       products: (params.products || []).join(','),
+    }, opts),
+
+  /**
+   * Ersatzweg im MVV (U-Bahn, Tram, Bus) zwischen zwei Punkten — über die
+   * MVG, weil die Fahrplanquelle der ÖBB die Münchner U-Bahn nicht kennt.
+   * Liegt ein Ende außerhalb des MVG-Netzes, ist die Antwort leer.
+   */
+  localRoute: (params, opts) =>
+    call('localroute', {
+      fromLat: params.fromLat, fromLon: params.fromLon,
+      toLat: params.toLat, toLon: params.toLon,
+      date: params.date, time: params.time,
+    }, opts),
+
+  /**
+   * Alle DB-Tarife einer Verbindung (Super Sparpreis bis Flexpreis, beide
+   * Klassen, mit Bedingungen). `ctx` ist der ctxRecon, den die Suche an der
+   * Verbindung als `dbRecon` mitliefert.
+   */
+  offers: (params, opts) =>
+    call('offers', {
+      ctx: params.ctx,
+      class: params.travelClass || 2,
+      discounts: (params.discounts || []).join(','),
+    }, opts),
+
+  /**
+   * Abfahrts- oder Ankunftstafel. lat/lon helfen dem Server, in München die
+   * MVG-Haltestellen des Bahnhofs zu finden.
+   */
+  departures: (params, opts) =>
+    call('departures', {
+      station: params.station,
+      lat: coord(params.lat), lon: coord(params.lon),
+      date: params.date, time: params.time,
+      type: params.type || 'dep',
+      duration: params.duration || 60,
     }, opts),
 
   disruptions: (opts) => call('disruptions', {}, opts),
@@ -119,6 +175,10 @@ export const api = {
         minchange: params.minChange || '',
         // Blätter-Kontext der vorigen Antwort; leer = erste Seite.
         scroll: params.scroll || '',
+        // Koordinaten der beiden Enden. Damit erkennt der Server Stadtfahrten
+        // in München, ohne jeden Bahnhof erst nachschlagen zu müssen.
+        fromLat: coord(params.fromLat), fromLon: coord(params.fromLon),
+        toLat: coord(params.toLat), toLon: coord(params.toLon),
       },
       opts
     );

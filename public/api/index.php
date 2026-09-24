@@ -10,7 +10,10 @@
  *   ?action=livetrains&bbox=..              Live-Positionen im Ausschnitt
  *   ?action=traindetails&jid=..             Zuglauf mit Halten und Verspätung
  *   ?action=bestprices&from=..&to=..&date=.. Preisstrecke für eine Woche
- *   ?action=nextconnection&from=..&to=..    Nächster Anschluss nach einem knappen Umstieg
+ *   ?action=nextconnection&from=..&to=..    Nächster Anschluss nach einem knappen Umstieg oder Ausfall
+ *   ?action=localroute&fromLat=..&toLat=..  Ersatzweg im MVV (U-Bahn, Tram, Bus) über die MVG
+ *   ?action=offers&ctx=..                   Alle DB-Tarife einer Verbindung samt Bedingungen
+ *   ?action=departures&station=..           Abfahrts-/Ankunftstafel (HAFAS, in München plus MVG)
  *   ?action=fxrate                          EZB-Tageskurse (für CHF neben EUR)
  *   ?action=platforms&lat=..&lon=..         Bahnsteiglage aus OSM für den Umstiegsplan
  *   ?action=works                           Bauarbeiten im Netz, mit Abschnitt und Zeitraum
@@ -122,6 +125,7 @@ require __DIR__ . '/lib/Providers/Mvg.php';
 require __DIR__ . '/lib/Providers/Overpass.php';
 require __DIR__ . '/lib/Providers/StreckenInfo.php';
 require __DIR__ . '/lib/RailGeometry.php';
+require __DIR__ . '/lib/CityTrips.php';
 
 $config = require __DIR__ . '/config.php';
 
@@ -187,6 +191,8 @@ const RATE_COST = [
     'works'          => 4,
     'platforms'      => 4,
     'nextconnection' => 4,
+    'offers'         => 4,
+    'departures'     => 2,
     'bestprices'     => 5,
     'journeys'       => 5,
 ];
@@ -232,6 +238,15 @@ try {
         case 'nextconnection':
             handleNextConnection($http, $config, $cache);
             break;
+        case 'localroute':
+            handleLocalRoute($http, $config, $cache);
+            break;
+        case 'offers':
+            handleOffers($http, $config, $cache);
+            break;
+        case 'departures':
+            handleDepartures($http, $config, $cache);
+            break;
         case 'fxrate':
             handleFxRate($http, $config, $cache);
             break;
@@ -245,7 +260,7 @@ try {
             handleDisruptions($http, $config, $cache);
             break;
         default:
-            fail('Unbekannte Aktion. Erlaubt: health, catalogue, locations, journeys, livetrains, traindetails, bestprices, nextconnection, fxrate, platforms, works, disruptions', 400);
+            fail('Unbekannte Aktion. Erlaubt: health, catalogue, locations, journeys, livetrains, traindetails, bestprices, nextconnection, localroute, offers, departures, fxrate, platforms, works, disruptions', 400);
     }
 } catch (Throwable $e) {
     // Details bleiben im Log, der Client bekommt nur eine generische Meldung.
@@ -384,9 +399,67 @@ function handleLiveTrains(Http $http, array $config, Cache $cache): void
  */
 function handleTrainDetails(Http $http, array $config, Cache $cache): void
 {
+    // DREI QUELLEN für einen Zuglauf. HAFAS über die jid ist der Normalfall.
+    // Wo die fehlt - U-Bahn, Tram und Bus in München, deren Fahrplan von der
+    // DB oder der MVG kommt -, springen die DB mit ihrer journeyId und die
+    // MVG mit ihrer Abfahrtstafel ein. Die Antwort hat in allen drei Fällen
+    // dasselbe Format, die Live-Verfolgung merkt keinen Unterschied.
+    $dbId = trim((string) ($_GET['db'] ?? ''));
+    if ($dbId !== '') {
+        if (strlen($dbId) > 600) {
+            fail('Parameter "db" ist ungültig.', 400);
+        }
+        $key = 'jddb:' . md5($dbId);
+        $cached = $cache->get($key, 30);
+        if ($cached !== null) {
+            ok(['train' => $cached, 'cached' => true]);
+        }
+        $res = (new DbVendo($http, $config['providers']['db']))->trip($dbId);
+        if (!$res['ok']) {
+            fail('Zuglauf bei der DB nicht verfügbar: ' . $res['error'], 502);
+        }
+        $cache->set($key, $res['data']);
+        ok(['train' => $res['data'], 'cached' => false]);
+    }
+
+    $mvgFrom = trim((string) ($_GET['mvgFrom'] ?? ''));
+    if ($mvgFrom !== '') {
+        $leg = [
+            'from'     => $mvgFrom,
+            'to'       => trim((string) ($_GET['mvgTo'] ?? '')),
+            'line'     => trim((string) ($_GET['line'] ?? '')),
+            'dep'      => trim((string) ($_GET['dep'] ?? '')),
+            'arr'      => trim((string) ($_GET['arr'] ?? '')),
+            'fromName' => trim((string) ($_GET['fromName'] ?? '')),
+            'toName'   => trim((string) ($_GET['toName'] ?? '')),
+        ];
+        foreach (['from', 'to'] as $k) {
+            if (!preg_match('/^[A-Za-z0-9:_-]{3,60}$/', $leg[$k])) {
+                fail('MVG-Halt ungültig.', 400);
+            }
+        }
+        if ($leg['line'] === '' || $leg['dep'] === '' || $leg['arr'] === '') {
+            fail('Parameter "line", "dep" und "arr" sind erforderlich.', 400);
+        }
+        if (($config['providers']['mvg']['enabled'] ?? false) !== true) {
+            fail('MVG-Provider ist abgeschaltet.', 400);
+        }
+        $key = 'jdmvg:' . md5(json_encode($leg));
+        $cached = $cache->get($key, 30);
+        if ($cached !== null) {
+            ok(['train' => $cached, 'cached' => true]);
+        }
+        $res = (new Mvg($http, $config['providers']['mvg']))->trip($leg);
+        if (!$res['ok']) {
+            fail('Echtzeit der MVG nicht verfügbar: ' . $res['error'], 502);
+        }
+        $cache->set($key, $res['data']);
+        ok(['train' => $res['data'], 'cached' => false]);
+    }
+
     $jid = trim((string) ($_GET['jid'] ?? ''));
     if ($jid === '') {
-        fail('Parameter "jid" fehlt.', 400);
+        fail('Parameter "jid", "db" oder "mvgFrom" fehlt.', 400);
     }
 
     // Die Pünktlichkeitshistorie kommt NICHT in den Cache: sie wächst mit
@@ -549,9 +622,12 @@ function handleNextConnection(Http $http, array $config, Cache $cache): void
     $oebb = new OebbHafas($http, $config['providers']['oebb']);
     // Etwas mehr anfragen als gebraucht: der verpasste Zug selbst und
     // Verbindungen vor dem Stichzeitpunkt fallen unten noch heraus.
+    // Immer mit Echtzeit: gesucht wird der Weg JETZT, um einen Ausfall oder
+    // einen geplatzten Anschluss herum. Die Fahrplansuche bot hier die
+    // nächste S-Bahn derselben gesperrten Strecke an.
     $res = $oebb->journeys(
         $from, $to, $date, $time, false, $limit + 3, $travelClass, [],
-        Products::bitmask($products), 1
+        Products::bitmask($products), 1, null, isNearNow($date, $time)
     );
 
     if (!$res['ok']) {
@@ -572,6 +648,13 @@ function handleNextConnection(Http $http, array $config, Cache $cache): void
         }
         // Denselben Zug noch einmal anzubieten wäre sinnlos.
         if ($exclude !== '' && firstTrainNumber($j) === $exclude) {
+            continue;
+        }
+        // Eine Alternative, die selbst ausfällt, ist keine. Bei einer
+        // gesperrten Strecke ist das der Normalfall: die nächste S-Bahn auf
+        // derselben Linie fällt genauso aus wie die, für die hier Ersatz
+        // gesucht wird - `exclude` erwischt nur die eine Zugnummer.
+        if (hasCancelledLeg($j)) {
             continue;
         }
 
@@ -611,6 +694,306 @@ function wallClock(?string $iso): ?string
     }
 }
 
+/**
+ * Liegt ein Zeitpunkt nah genug an jetzt, dass die Echtzeitlage zählt?
+ *
+ * Eine Stunde zurück (wer die Verbindung von eben nachschlägt) bis drei
+ * Stunden voraus - weiter reicht keine Prognose. Datum und Uhrzeit sind
+ * mitteleuropäische Ortszeit, wie im Formular.
+ */
+function isNearNow(string $date, string $time): bool
+{
+    try {
+        $t = (new DateTimeImmutable($date . ' ' . $time, new DateTimeZone('Europe/Berlin')))->getTimestamp();
+    } catch (Exception) {
+        return false;
+    }
+    $d = $t - time();
+    return $d >= -3600 && $d <= 3 * 3600;
+}
+
+/** Fällt irgendein Zugabschnitt dieser Verbindung aus? */
+function hasCancelledLeg(array $journey): bool
+{
+    foreach ($journey['legs'] ?? [] as $leg) {
+        if (($leg['mode'] ?? '') === 'train' && !empty($leg['cancelled'])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Ersatzweg innerhalb des MVV - über die MVG statt über HAFAS.
+ *
+ * WOZU: Die Fahrplanquelle der ÖBB kennt die Münchner U-Bahn nicht. Fällt
+ * die S-Bahn-Stammstrecke aus, konnte die App deshalb nur weitere S-Bahnen
+ * anbieten - die ebenfalls ausfallen - und nie die U-Bahn, mit der man
+ * tatsächlich weiterkommt. Die MVG kennt das ganze Netz samt Echtzeit.
+ *
+ * Gesucht wird zwischen zwei PUNKTEN, nicht zwischen HAFAS-Kennungen: die
+ * MVG versteht EVA-Nummern nicht. Beide Enden werden auf die nächste
+ * MVG-Haltestelle abgebildet; liegt eines ausserhalb (weiter als 400 m von
+ * jeder Haltestelle), gibt es hier nichts zu holen, und die Antwort ist leer.
+ *
+ * Gedacht als ÜBERBRÜCKUNG eines ausgefallenen Abschnitts: vom Einstieg des
+ * ausgefallenen Zuges bis zu seinem Ausstieg. Was danach kommt, setzt das
+ * Frontend wieder an.
+ */
+function handleLocalRoute(Http $http, array $config, Cache $cache): void
+{
+    if (($config['providers']['mvg']['enabled'] ?? false) !== true) {
+        ok(['connections' => [], 'note' => 'MVG-Provider ist abgeschaltet.']);
+    }
+
+    $num = static fn(string $k): ?float => is_numeric($_GET[$k] ?? null) ? (float) $_GET[$k] : null;
+    $fromLat = $num('fromLat');
+    $fromLon = $num('fromLon');
+    $toLat   = $num('toLat');
+    $toLon   = $num('toLon');
+    $date = trim((string) ($_GET['date'] ?? ''));
+    $time = trim((string) ($_GET['time'] ?? ''));
+
+    if ($fromLat === null || $fromLon === null || $toLat === null || $toLon === null) {
+        fail('Parameter "fromLat", "fromLon", "toLat" und "toLon" sind erforderlich.', 400);
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !preg_match('/^\d{2}:\d{2}$/', $time)) {
+        fail('Parameter "date" (YYYY-MM-DD) und "time" (HH:MM) sind erforderlich.', 400);
+    }
+
+    // Kurz halten: gesucht wird ein Weg um einen AKTUELLEN Ausfall herum, und
+    // die Echtzeitlage ändert sich minütlich.
+    $key = sprintf('localroute:%.4f,%.4f|%.4f,%.4f|%s %s', $fromLat, $fromLon, $toLat, $toLon, $date, $time);
+    $ttl = (int) ($config['cache_ttl']['disruptions'] ?? 120);
+    $cached = $cache->get($key, $ttl);
+    if ($cached !== null) {
+        ok(['connections' => $cached, 'cached' => true]);
+    }
+
+    $mvg = new Mvg($http, $config['providers']['mvg']);
+    $von = $mvg->nearestStation($fromLat, $fromLon);
+    $bis = $mvg->nearestStation($toLat, $toLon);
+
+    if ($von === null || $bis === null || $von['globalId'] === $bis['globalId']) {
+        $cache->set($key, []);
+        ok(['connections' => [], 'note' => 'Nicht im MVG-Netz.']);
+    }
+
+    // Die Anfrage nennt Münchner Ortszeit; die MVG will UTC.
+    try {
+        $utc = (new DateTimeImmutable($date . ' ' . $time, new DateTimeZone('Europe/Berlin')))
+            ->setTimezone(new DateTimeZone('UTC'))
+            ->format('Y-m-d\TH:i:s.000\Z');
+    } catch (Exception) {
+        fail('Ungültige Zeitangabe.', 400);
+    }
+
+    $res = $mvg->routes($von['globalId'], $bis['globalId'], $utc, 4);
+    if (!$res['ok']) {
+        ok(['connections' => [], 'error' => $res['error']]);
+    }
+
+    $out = [];
+    foreach ($res['data'] as $j) {
+        $j = annotateTransfers($j);
+        $j['trains'] = trainLabels($j);
+        $out[] = $j;
+    }
+
+    $cache->set($key, $out);
+    ok(['connections' => $out, 'cached' => false]);
+}
+
+/**
+ * Alle Tarife einer Verbindung bei der DB.
+ *
+ * Die Trefferliste zeigt den günstigsten Preis. Ob der eine Zugbindung hat,
+ * was der Flexpreis kostet und ob sich die 1. Klasse lohnt, steht dort
+ * nicht - das liefert die DB erst auf Nachfrage für genau eine Verbindung,
+ * über deren ctxRecon (siehe DbVendo::offers()). Das Frontend fragt beim
+ * Aufklappen.
+ */
+function handleOffers(Http $http, array $config, Cache $cache): void
+{
+    if (($config['providers']['db']['enabled'] ?? false) !== true) {
+        fail('Die DB-Anbindung ist abgeschaltet.', 400);
+    }
+
+    $ctx = (string) ($_GET['ctx'] ?? '');
+    // Ein ctxRecon ist rund tausend Zeichen lang. Was deutlich länger ist,
+    // kommt nicht von der DB.
+    if ($ctx === '' || strlen($ctx) > 8000) {
+        fail('Parameter "ctx" fehlt oder ist ungültig.', 400);
+    }
+    $travelClass = ((string) ($_GET['class'] ?? '2')) === '1' ? 1 : 2;
+    $discounts = array_values(array_filter(
+        array_map('trim', explode(',', (string) ($_GET['discounts'] ?? ''))),
+        static fn($d) => $d !== ''
+    ));
+
+    $key = 'offers:' . sha1($ctx . '|' . $travelClass . '|' . implode('+', $discounts));
+    $cached = $cache->get($key, (int) ($config['cache_ttl']['prices'] ?? 600));
+    if ($cached !== null) {
+        ok($cached + ['cached' => true]);
+    }
+
+    $db  = new DbVendo($http, $config['providers']['db']);
+    $res = $db->offers($ctx, $travelClass, $discounts);
+    if (!$res['ok']) {
+        fail($res['error'] ?? 'Tarife nicht verfügbar.', 502);
+    }
+
+    $cache->set($key, $res['data']);
+    ok($res['data'] + ['cached' => false]);
+}
+
+/**
+ * Abfahrts- oder Ankunftstafel eines Bahnhofs.
+ *
+ * HAFAS liefert die Tafel für jeden Bahnhof in CH, DE und AT. In München
+ * kommt die MVG dazu, aus zwei Gründen: HAFAS kennt die U-Bahn nicht, und
+ * für die S-Bahn oft nur den Fahrplan - die MVG hat für beides Echtzeit.
+ * Eine S-Bahn, die beide Quellen nennen, steht einmal da: mit der jid von
+ * HAFAS (für den Zuglauf) und der Ist-Zeit der MVG.
+ *
+ * Reine MVG-Halte ("mvg:…") haben nur die MVG-Tafel.
+ */
+function handleDepartures(Http $http, array $config, Cache $cache): void
+{
+    $station = trim((string) ($_GET['station'] ?? ''));
+    if ($station === '' || strlen($station) > 80) {
+        fail('Parameter "station" fehlt.', 400);
+    }
+    $now  = new DateTimeImmutable('now', new DateTimeZone('Europe/Berlin'));
+    $date = trim((string) ($_GET['date'] ?? $now->format('Y-m-d')));
+    $time = trim((string) ($_GET['time'] ?? $now->format('H:i')));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !preg_match('/^\d{2}:\d{2}$/', $time)) {
+        fail('Parameter "date" (YYYY-MM-DD) und "time" (HH:MM) sind ungültig.', 400);
+    }
+    $arrivals = ($_GET['type'] ?? 'dep') === 'arr';
+    $duration = max(15, min(180, (int) ($_GET['duration'] ?? 60)));
+    $products = array_values(array_filter(
+        array_map('trim', explode(',', (string) ($_GET['products'] ?? ''))),
+        static fn($p) => $p !== '' && in_array($p, Products::allIds(), true)
+    ));
+    $num = static fn(string $k): ?float => is_numeric($_GET[$k] ?? null) ? (float) $_GET[$k] : null;
+    $lat = $num('lat');
+    $lon = $num('lon');
+
+    // Eine Tafel lebt von der Echtzeit - eine Minute ist genug.
+    $key = 'board:' . implode('|', [$station, $date, $time, $arrivals ? 'a' : 'd', $duration, implode('+', $products)]);
+    $cached = $cache->get($key, 60);
+    if ($cached !== null) {
+        ok($cached + ['cached' => true]);
+    }
+
+    $isMvg   = str_starts_with($station, 'mvg:');
+    $entries = [];
+    $info    = null;
+    $sources = [];
+    $error   = null;
+
+    if (!$isMvg) {
+        $oebb = new OebbHafas($http, $config['providers']['oebb']);
+        $res  = $oebb->stationBoard($station, $date, $time, $arrivals, $duration, 60, Products::bitmask($products));
+        if ($res['ok']) {
+            $entries = $res['data'];
+            $info    = $res['station'];
+            $sources[] = 'hafas';
+        } else {
+            $error = $res['error'];
+        }
+    }
+
+    // MVG: nur für Abfahrten (Ankünfte kennt sie nicht), nur ab jetzt bis
+    // einen Tag voraus, und nur, wo überhaupt eine MVG-Haltestelle ist.
+    $offset = (int) floor((strtotime($date . ' ' . $time . ' Europe/Berlin') - time()) / 60);
+    $mvgOn  = ($config['providers']['mvg']['enabled'] ?? false) === true;
+    if ($mvgOn && !$arrivals && $offset > -15 && $offset < 1440) {
+        $mvg  = new Mvg($http, $config['providers']['mvg']);
+        $gids = $isMvg ? [substr($station, 4)] : [];
+        $bLat = $lat ?? ($info['lat'] ?? null);
+        $bLon = $lon ?? ($info['lon'] ?? null);
+        if (!$isMvg && $bLat !== null && $bLon !== null && Mvg::inArea($bLat, $bLon)) {
+            // Alle MVG-Halte des Bahnhofs, eine Woche gemerkt.
+            $gkey = sprintf('mvgaround:%.4f,%.4f', $bLat, $bLon);
+            $gids = $cache->get($gkey, 604800) ?? $mvg->stationsAround($bLat, $bLon);
+            $cache->set($gkey, $gids);
+        }
+        if ($gids !== []) {
+            $m = $mvg->departuresMany($gids, max(0, $offset), 40);
+            if ($m['ok']) {
+                $entries = mergeBoards($entries, $m['data']);
+                $sources[] = 'mvg';
+            } elseif ($entries === []) {
+                $error = $m['error'];
+            }
+        }
+    }
+
+    if ($entries === [] && $error !== null) {
+        fail('Tafel nicht verfügbar: ' . $error, 502);
+    }
+
+    // Auf das Zeitfenster beschränken und nach Plan sortieren. Die MVG
+    // liefert eine feste Anzahl, nicht ein Zeitfenster.
+    $von = strtotime($date . ' ' . $time . ' Europe/Berlin');
+    $bis = $von + $duration * 60;
+    $entries = array_values(array_filter($entries, static function ($e) use ($von, $bis) {
+        $t = strtotime((string) $e['planned']);
+        return $t !== false && $t >= $von - 60 && $t <= $bis;
+    }));
+    usort($entries, static fn($a, $b) => strcmp((string) $a['planned'], (string) $b['planned']));
+
+    $payload = [
+        'station'    => $info,
+        'arrivals'   => $arrivals,
+        'departures' => $entries,
+        'sources'    => $sources,
+        'until'      => date('c', $bis),
+    ];
+    $cache->set($key, $payload);
+    ok($payload + ['cached' => false]);
+}
+
+/**
+ * MVG-Abfahrten in eine HAFAS-Tafel einsortieren.
+ *
+ * Gleiche Linie, gleiche Planminute: derselbe Zug. Dann bekommt der
+ * HAFAS-Eintrag die Ist-Zeit der MVG, falls er selbst keine hat, und
+ * behält seine jid. Alles andere - U-Bahn, Tram, Bus - kommt dazu.
+ */
+function mergeBoards(array $hafas, array $mvg): array
+{
+    // "RB 16" (MVG) und "RB16" (HAFAS) sind dieselbe Linie.
+    $key = static fn(array $e): string => mb_strtolower(str_replace(' ', '', (string) $e['line']))
+        . '|' . substr((string) $e['planned'], 0, 16);
+    $index = [];
+    foreach ($hafas as $i => $e) {
+        $index[$key($e)] = $i;
+    }
+    foreach ($mvg as $e) {
+        $k = $key($e);
+        if (!isset($index[$k])) {
+            $hafas[] = $e;
+            continue;
+        }
+        $i = $index[$k];
+        if ($hafas[$i]['real'] === null && $e['real'] !== null) {
+            $hafas[$i]['real']  = $e['real'];
+            $hafas[$i]['delay'] = $e['delay'];
+        }
+        if ($e['cancelled']) {
+            $hafas[$i]['cancelled'] = true;
+        }
+        if (!empty($e['remarks'])) {
+            $hafas[$i]['remarks'] = $e['remarks'];
+        }
+        $hafas[$i]['source'] = 'hafas+mvg';
+    }
+    return $hafas;
+}
+
 /** Zugnummer des ersten Zuges einer Verbindung, '' wenn unbekannt. */
 function firstTrainNumber(array $journey): string
 {
@@ -634,9 +1017,25 @@ function trainLabels(array $journey): array
         if (($leg['mode'] ?? '') !== 'train') {
             continue;
         }
-        $cat = trim((string) ($leg['category'] ?? ''));
-        $num = trim((string) ($leg['trainNumber'] ?? $leg['line'] ?? ''));
-        $label = trim($cat . ' ' . $num);
+        // Dieselbe Regel wie trainLabel() im Frontend: im Linienverkehr
+        // benennt die LINIE den Zug ("S 33", "U5"), im Fernverkehr die
+        // Zugnummer ("ICE 593"). Vorher stand hier `trainNumber ?? line` -
+        // ein leerer String ist aber nicht null, der Rückfall griff nie, und
+        // aus der U5 wurde ein nacktes "U".
+        $cat  = trim((string) ($leg['category'] ?? ''));
+        $line = trim((string) ($leg['line'] ?? ''));
+        $num  = trim((string) ($leg['trainNumber'] ?? ''));
+
+        // Eine Linie, die mit einem Buchstaben beginnt ("S5", "RE3", "U5"),
+        // benennt sich selbst - die Gattung davor waere hoechstens falsch:
+        // HAFAS fuehrt die Muenchner S-Bahn unter der Gattung "DB", und
+        // "DB S5" steht auf keinem Bahnsteig. Nur eine rein numerische Linie
+        // ("33") braucht die Gattung davor.
+        if ($line !== '') {
+            $label = $cat !== '' && preg_match('/^\d/', $line) ? $cat . ' ' . $line : $line;
+        } else {
+            $label = trim($cat . ' ' . $num);
+        }
         if ($label !== '') {
             $out[] = $label;
         }
@@ -831,6 +1230,7 @@ function handlePlatforms(Http $http, array $config, Cache $cache): void
         ok([
             'platforms'   => $station['platforms'],
             'trackPoints' => $station['trackPoints'] ?? [],
+            'connectors'  => $station['connectors'] ?? [],
         ]);
     }
 
@@ -862,6 +1262,8 @@ function handlePlatforms(Http $http, array $config, Cache $cache): void
         // bessere Markierung als der Schwerpunkt der Bahnsteigfläche - siehe
         // Overpass::stationData().
         'trackPoints' => $station['trackPoints'] ?? [],
+        // Treppen, Rolltreppen und Aufzüge - wo es von Ebene zu Ebene geht.
+        'connectors'  => $station['connectors'] ?? [],
         // Damit die Anzeige "gleicher Bahnsteig" von "andere Seite der Halle"
         // unterscheiden kann.
         'samePlatform' => $a !== null && $a === $b,
@@ -884,6 +1286,11 @@ function stationData(Http $http, array $config, Cache $cache, float $lat, float 
     $long = (int) ($config['cache_ttl']['platforms'] ?? 604800);
 
     $cached = $cache->get($key, $long);
+    // Einträge von vor den Treppen und Aufzügen einmal neu holen - sonst
+    // fehlten sie eine Woche lang an jedem schon besuchten Bahnhof.
+    if ($cached !== null && !array_key_exists('connectors', $cached)) {
+        $cached = null;
+    }
     if ($cached !== null) {
         // Ein LEERES Ergebnis darf nicht eine Woche lang gelten. Overpass
         // antwortet unter Last mit Zeitüberschreitungen; die Antwort ist dann
@@ -957,7 +1364,15 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
     // Abfahrten, der aus 'scroll' zu späteren.
     $scroll = trim((string) ($_GET['scroll'] ?? ''));
 
+    // ECHTZEIT-ROUTING für alles, was bald fährt. Wer jetzt losfahren will,
+    // braucht keine Verbindung, deren Anschluss eine Verspätung längst
+    // gekappt hat - und keine, die über einen ausgefallenen Zug führt. Für
+    // die Suche nach nächster Woche gibt es keine Echtzeitlage; dort bleibt
+    // es beim Fahrplan.
+    $realtime = isNearNow($date, $time);
+
     $cacheKey = 'jny:' . implode('|', [
+        $realtime ? 'rt' : 'plan',
         $from, $to, $date, $time, $arrival ? 'a' : 'd',
         $travelClass, $results, implode('+', $discounts), implode('+', $viaIds),
         implode('+', $products), $minChange ?? '-',
@@ -970,20 +1385,104 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
 
     $notices = [];
 
+    // --- 0. Stadtfahrt oder Zubringer in München? ----------------------
+    //
+    // Siehe CityTrips. Kurz: liegen beide Enden im MVG-Netz, sucht (auch)
+    // die MVG. Ist nur ein Ende ein reiner MVG-Halt, sucht HAFAS ab bzw. bis
+    // München Hbf, und die MVG liefert das Stück dazu.
+    $coord = static fn(string $k): ?float => is_numeric($_GET[$k] ?? null) ? (float) $_GET[$k] : null;
+    $mvg = ($config['providers']['mvg']['enabled'] ?? false) === true
+        ? new Mvg($http, $config['providers']['mvg']) : null;
+    $city = null;          // 'local' | 'from' | 'to'
+    $fromGid = null;
+    $toGid = null;
+    $hubGid = null;
+    $fromIsMvg = str_starts_with($from, 'mvg:');
+    $toIsMvg   = str_starts_with($to, 'mvg:');
+    $mvgScroll = CityTrips::parseScroll($scroll);
+    if ($mvg !== null && $viaIds === []) {
+        $fromGid = CityTrips::station($mvg, $cache, $from, $coord('fromLat'), $coord('fromLon'));
+        if ($fromGid !== null || $toIsMvg) {
+            $toGid = CityTrips::station($mvg, $cache, $to, $coord('toLat'), $coord('toLon'));
+        }
+        if ($fromGid !== null && $toGid !== null && $fromGid !== $toGid) {
+            $city = 'local';
+        } elseif ($fromIsMvg xor $toIsMvg) {
+            $hubGid = CityTrips::hub($mvg, $cache);
+            if ($hubGid !== null && ($fromIsMvg ? $fromGid : $toGid) !== null) {
+                $city = $fromIsMvg ? 'from' : 'to';
+            }
+        }
+    }
+
+    // Stadtfahrt mit einem reinen MVG-Halt: den kennt HAFAS nicht, dann
+    // bleibt es bei der MVG allein. Ebenso beim Weiterblättern einer solchen
+    // Liste - der Kontext ist dann ein Zeitpunkt, siehe CityTrips::scrollFor().
+    $localJourneys = [];
+    $mvgOnly = $city === 'local' && ($fromIsMvg || $toIsMvg || $mvgScroll !== null);
+
+    // Zubringer: HAFAS sucht ab bzw. bis München Hbf. Auf der ersten Seite
+    // verschiebt sich dabei die Uhrzeit um die Fahrt in der Stadt - wer um
+    // 8:00 am Odeonsplatz losfährt, erreicht keinen ICE um 8:01.
+    $hFrom = $from;
+    $hTo   = $to;
+    $hDate = $date;
+    $hTime = $time;
+    if ($city === 'from' || $city === 'to') {
+        if ($city === 'from') {
+            $hFrom = CityTrips::HUB_EVA;
+        } else {
+            $hTo = CityTrips::HUB_EVA;
+        }
+        $verschieben = $scroll === '' && (($city === 'from' && !$arrival) || ($city === 'to' && $arrival));
+        if ($verschieben) {
+            $iso = CityTrips::utc($date, $time);
+            $probe = $iso !== null
+                ? $mvg->routes($city === 'from' ? $fromGid : $hubGid, $city === 'from' ? $hubGid : $toGid, $iso, 1, $arrival)
+                : ['data' => []];
+            $dauer = (int) ($probe['data'][0]['durationMin'] ?? 15) + CityTrips::TRANSFER_MIN;
+            try {
+                $t = (new DateTimeImmutable($date . ' ' . $time, new DateTimeZone('Europe/Berlin')))
+                    ->modify(sprintf('%+d minutes', $city === 'from' ? $dauer : -$dauer));
+                $hDate = $t->format('Y-m-d');
+                $hTime = $t->format('H:i');
+            } catch (Exception) {
+                // Bleibt bei der eingegebenen Zeit.
+            }
+        }
+        $notices[] = $city === 'from'
+            ? 'Fernverkehr ab ' . CityTrips::HUB_NAME . ', dorthin mit U-Bahn, Tram oder Bus (MVG).'
+            : 'Fernverkehr bis ' . CityTrips::HUB_NAME . ', von dort weiter mit U-Bahn, Tram oder Bus (MVG).';
+    }
+
     // --- 1. Fahrplan von der ÖBB -------------------------------------
     $oebb = new OebbHafas($http, $config['providers']['oebb']);
-    $sched = $oebb->journeys(
-        $from, $to, $date, $time, $arrival, $results, $travelClass, $viaIds,
-        Products::bitmask($products), $minChange, $scroll === '' ? null : $scroll
-    );
+    $hScroll = $scroll === '' || $mvgScroll !== null ? null : $scroll;
+    if ($mvgOnly) {
+        // Reiner MVG-Halt oder MVG-Blätterkontext: HAFAS kann damit nichts.
+        $sched = ['ok' => true, 'error' => null, 'data' => [], 'scrollF' => null, 'scrollB' => null];
+    } else {
+        $sched = $oebb->journeys(
+            $hFrom, $hTo, $hDate, $hTime, $arrival, $results, $travelClass, $viaIds,
+            Products::bitmask($products), $minChange, $hScroll, $realtime
+        );
+        // Findet die Echtzeitsuche gar nichts, zeigt der Fahrplan wenigstens,
+        // was eigentlich fahren sollte - samt Ausfall-Kennzeichnung und Ersatz.
+        if ($realtime && $sched['ok'] && $sched['data'] === []) {
+            $sched = $oebb->journeys(
+                $hFrom, $hTo, $hDate, $hTime, $arrival, $results, $travelClass, $viaIds,
+                Products::bitmask($products), $minChange, $hScroll
+            );
+        }
+    }
 
     $journeys    = $sched['ok'] ? $sched['data'] : [];
 
     // Beim Weiterblättern liegt das Zeitfenster woanders als in $time. Für
     // die Preisabfrage zählt, wann die gelieferten Verbindungen tatsächlich
     // fahren - sonst holt die DB Preise für den falschen Tagesabschnitt.
-    $priceDate = $date;
-    $priceTime = $time;
+    $priceDate = $hDate;
+    $priceTime = $hTime;
     if ($scroll !== '' && $journeys !== []) {
         $firstDep = $journeys[0]['departure'] ?? null;
         if ($firstDep !== null) {
@@ -996,8 +1495,24 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
             }
         }
     }
+    // Stadtfahrt: die MVG-Treffer für dasselbe Zeitfenster. Beim Blättern
+    // einer gemischten Liste ist das der Anfang der neuen HAFAS-Seite.
+    if ($city === 'local') {
+        [$lDate, $lTime] = $mvgScroll ?? [$priceDate, $priceTime];
+        $iso = CityTrips::utc($lDate, $lTime);
+        $lr = $iso !== null
+            ? $mvg->routes($fromGid, $toGid, $iso, max(4, $results), $arrival && $scroll === '')
+            : ['ok' => false, 'data' => [], 'error' => null];
+        foreach ($lr['data'] as $j) {
+            $j['id'] = CityTrips::stableId($j);
+            $j = annotateTransfers($j);
+            $j['trains'] = trainLabels($j);
+            $localJourneys[] = $j;
+        }
+    }
+
     $priceSource = 'estimate';
-    $dbEnabled   = ($config['providers']['db']['enabled'] ?? false) === true;
+    $dbEnabled   = ($config['providers']['db']['enabled'] ?? false) === true && !$mvgOnly;
     $db          = $dbEnabled ? new DbVendo($http, $config['providers']['db']) : null;
 
     // --- 2. Preise von der DB, notfalls auch den Fahrplan --------------
@@ -1008,7 +1523,7 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
     // übernimmt sie in dem Fall auch den Fahrplan.
     if ($db !== null) {
         $priced = $db->journeys(
-            $from, $to, $priceDate, $priceTime, $arrival, $travelClass, $discounts, true, $products, $minChange
+            $hFrom, $hTo, $priceDate, $priceTime, $arrival, $travelClass, $discounts, true, $products, $minChange
         );
 
         if ($journeys === [] && $priced['ok'] && $priced['data'] !== []) {
@@ -1037,7 +1552,7 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
         }
     }
 
-    if ($journeys === []) {
+    if ($journeys === [] && $localJourneys === []) {
         if (!$sched['ok'] && $db === null) {
             fail('Fahrplanabfrage fehlgeschlagen: ' . $sched['error'], 502);
         }
@@ -1101,7 +1616,7 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
         ));
         if ($kept !== []) {
             $journeys = $kept;
-        } else {
+        } elseif ($journeys !== []) {
             $notices[] = 'Keine Verbindung erreicht ' . $minChange
                 . ' Minuten Umsteigezeit — es werden die knapperen gezeigt.';
         }
@@ -1125,15 +1640,51 @@ function handleJourneys(Http $http, array $config, Cache $cache): void
         }
     }
 
+    // --- 6. München: Zubringer anhängen, Stadtfahrten dazunehmen -------
+    if ($city === 'from' || $city === 'to') {
+        $mitZubringer = CityTrips::attachFeeders(
+            $mvg, $city === 'from' ? $fromGid : $toGid, $hubGid, $journeys, $city
+        );
+        if ($mitZubringer !== []) {
+            // Der Umstieg zwischen U-Bahn und Fernzug zählt jetzt mit.
+            $journeys = array_map('annotateTransfers', $mitZubringer);
+        } elseif ($journeys !== []) {
+            $notices[] = 'Für das Stück in der Stadt hat die MVG gerade keine Verbindung geliefert - '
+                . 'gezeigt ist nur der Fernverkehr ab bzw. bis ' . CityTrips::HUB_NAME . '.';
+        }
+    }
+
+    $scrollF = $sched['scrollF'] ?? null;
+    $scrollB = $sched['scrollB'] ?? null;
+    if ($localJourneys !== []) {
+        $journeys = CityTrips::merge($journeys, $localJourneys, 'trainLabels');
+        // Reine Stadtfahrt: kein Preis zu schätzen, die MVG nennt Tarifzonen.
+        // Ohne das stünde oben "alle Preise sind Schätzungen".
+        if ($mvgOnly && $priceSource === 'estimate') {
+            $priceSource = 'mvv';
+        }
+        if ($mvgOnly || ($scrollF === null && $scrollB === null)) {
+            // Die MVG blättert nicht; weiter geht es ab der letzten Abfahrt.
+            // Ebenso, wenn der Rest der Liste von der DB kam - die liefert
+            // keinen Blätterkontext, den HAFAS verstünde.
+            $scrollF = CityTrips::scrollFor(end($localJourneys)['departure'] ?? null, 1);
+            $scrollB = CityTrips::scrollFor($localJourneys[0]['departure'] ?? null, -30);
+        }
+        if ($scroll === '') {
+            $notices[] = 'Stadtfahrt: Verbindungen mit U-Bahn, Tram und Bus von der MVG. '
+                . 'Im ganzen MVV gilt das Deutschlandticket.';
+        }
+    }
+
     $payload = [
         'journeys'    => $journeys,
         'priceSource' => $priceSource,
         'discounts'   => $discounts,
         'notices'     => $notices,
         // Womit sich die nächste Seite holen lässt; null = Ende der Fahne.
-        'scroll'      => $sched['scrollF'] ?? null,
+        'scroll'      => $scrollF,
         // Dasselbe rückwärts, für den Knopf "Frühere Verbindungen".
-        'scrollBack'  => $sched['scrollB'] ?? null,
+        'scrollBack'  => $scrollB,
     ];
 
     // Leere Ergebnisse NICHT cachen. Sonst friert eine einmalige leere
@@ -1201,6 +1752,11 @@ function mergePrices(array &$journeys, array $priced): int
 
         // Echtzeit, Auslastung und Deutschlandticket hängen nicht am Preis.
         mergeLegFlags($journeys[$i]['legs'], $best['legs'] ?? []);
+
+        // Der Schlüssel zu allen Tarifen dieser Verbindung - siehe handleOffers().
+        if (!empty($best['dbRecon'])) {
+            $journeys[$i]['dbRecon'] = $best['dbRecon'];
+        }
 
         if (($best['price'] ?? null) !== null) {
             $journeys[$i]['price']      = $best['price'];
@@ -1294,6 +1850,19 @@ function mergeLegFlags(array &$legs, array $dbLegs): void
         }
         if (!empty($match['remarks'])) {
             $legs[$i]['remarks'] = $match['remarks'];
+        }
+        // Ausstattung (Bordrestaurant, WLAN, Reservierungspflicht) und
+        // gestörte Aufzüge am Ein- und Ausstieg - beides kennt nur die DB.
+        if (!empty($match['amenities'])) {
+            $legs[$i]['amenities'] = $match['amenities'];
+        }
+        if (!empty($match['stationNotes'])) {
+            $legs[$i]['stationNotes'] = $match['stationNotes'];
+        }
+        // Zweite Quelle für die Live-Verfolgung: kennt HAFAS für die
+        // Münchner S-Bahn nur den Fahrplan, hat die DB oft die Ist-Zeit.
+        if (!empty($match['dbJourneyId'])) {
+            $legs[$i]['dbJourneyId'] = $match['dbJourneyId'];
         }
     }
 }

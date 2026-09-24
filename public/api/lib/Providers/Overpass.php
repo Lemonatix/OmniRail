@@ -43,6 +43,16 @@ final class Overpass
      */
     private const TRACK_SPACING_M = 15.0;
 
+    /**
+     * Umkreis für Treppen, Rolltreppen und Aufzüge. Kleiner als der für
+     * Bahnsteige: gefragt ist, was im Bahnhof von Ebene zu Ebene führt, nicht
+     * die Treppe zur Straßenbahn zwei Straßen weiter.
+     */
+    private const CONNECTOR_RADIUS_M = 250;
+
+    /** Mehr zeichnet auch Zürich HB nicht sinnvoll in einen Ausschnitt. */
+    private const MAX_CONNECTORS = 250;
+
     private Http $http;
     private array $cfg;
 
@@ -182,7 +192,17 @@ final class Overpass
         // warf "Unknown format specifier". Die Abfrage kam damit gar nicht
         // erst zustande - jeder Bahnhof ohne Cache-Eintrag meldete "keine
         // Bahnsteige erfasst", obwohl die Daten in OSM stehen.
+        //
+        // TREPPEN, ROLLTREPPEN, AUFZÜGE kommen in derselben Abfrage mit, als
+        // zweiter Block mit eigenem `out`. Sie sind keine Wegberechnung - die
+        // bleibt aus den oben genannten Gründen draußen -, sondern Tatsachen:
+        // hier geht es eine Ebene hinunter. In OSM sind sie an großen
+        // Bahnhöfen fast vollständig und mit Ebene erfasst (nachgezählt:
+        // Zürich HB 81 Rolltreppen, alle mit `level`; München Hbf 63;
+        // Mannheim 14). Für die Rolltreppen braucht es die Geometrie, sonst
+        // gibt es keine Fahrtrichtung - deshalb `out tags geom`, nur für sie.
         $r = self::RADIUS_M;
+        $c = self::CONNECTOR_RADIUS_M;
         $query = sprintf(
             '[out:json][timeout:40];('
             . 'node(around:%1$d,%2$.6f,%3$.6f)["railway"="platform"];'
@@ -193,8 +213,12 @@ final class Overpass
             . 'relation(around:%1$d,%2$.6f,%3$.6f)["public_transport"="platform"];'
             . 'node(around:%1$d,%2$.6f,%3$.6f)["public_transport"="stop_position"];'
             . 'node(around:%1$d,%2$.6f,%3$.6f)["railway"="stop"];'
-            . ');out tags center;',
-            $r, $lat, $lon
+            . ');out tags center;('
+            . 'node(around:%4$d,%2$.6f,%3$.6f)["highway"="elevator"];'
+            . 'way(around:%4$d,%2$.6f,%3$.6f)["highway"="steps"]["level"];'
+            . 'way(around:%4$d,%2$.6f,%3$.6f)["conveying"];'
+            . ');out tags geom;',
+            $r, $lat, $lon, $c
         );
 
         $antwort = $this->ask($query, $fehler);
@@ -202,7 +226,18 @@ final class Overpass
             return ['ok' => false, 'error' => $fehler, 'data' => []];
         }
 
-        $elements = $antwort['elements'] ?? [];
+        // Die Verbinder zwischen den Ebenen gehen ihren eigenen Weg - in der
+        // Bahnsteig-Auswertung darunter hätten sie nichts zu suchen.
+        $elements   = [];
+        $connectors = [];
+        foreach ($antwort['elements'] ?? [] as $e) {
+            $k = self::connector($e);
+            if ($k !== null) {
+                $connectors[] = $k;
+            } elseif (!self::isConnectorTagged($e['tags'] ?? [])) {
+                $elements[] = $e;
+            }
+        }
 
         $out    = [];
         $seen   = [];
@@ -378,8 +413,126 @@ final class Overpass
         return [
             'ok'    => true,
             'error' => null,
-            'data'  => ['platforms' => $platforms, 'trackPoints' => $punkte],
+            'data'  => [
+                'platforms'   => $platforms,
+                'trackPoints' => $punkte,
+                'connectors'  => array_slice($connectors, 0, self::MAX_CONNECTORS),
+            ],
         ];
+    }
+
+    /** Ist das ein Aufzug, eine Treppe oder eine Rolltreppe? */
+    private static function isConnectorTagged(array $tags): bool
+    {
+        $hw = (string) ($tags['highway'] ?? '');
+        return $hw === 'elevator' || $hw === 'steps' || isset($tags['conveying']);
+    }
+
+    /**
+     * Ein Verbinder zwischen Ebenen im Format der App - oder null.
+     *
+     *   type    elevator | escalator | steps
+     *   levels  alle Ebenen, die er berührt, als Zahlen
+     *   line    bei Treppen und Rolltreppen der Verlauf, [[lat, lon], …]
+     *   pos     Mittelpunkt
+     *   dir     Rolltreppe: forward (in Zeichenrichtung), backward, both
+     *
+     * Ohne Ebene taugt er nicht: dann weiß man nicht, wohin er führt. Das
+     * fängt nebenbei die Treppen im Straßenraum draußen vor dem Bahnhof ab,
+     * die in OSM kaum je eine Ebene tragen.
+     */
+    private static function connector(array $e): ?array
+    {
+        $tags = $e['tags'] ?? [];
+        if (!self::isConnectorTagged($tags)) {
+            return null;
+        }
+        $levels = self::parseLevels((string) ($tags['level'] ?? ''));
+        if ($levels === []) {
+            $levels = self::parseLevels((string) ($tags['repeat_on'] ?? ''));
+        }
+        if ($levels === []) {
+            return null;
+        }
+
+        $line = [];
+        foreach ($e['geometry'] ?? [] as $pt) {
+            if (isset($pt['lat'], $pt['lon'])) {
+                $line[] = [round((float) $pt['lat'], 6), round((float) $pt['lon'], 6)];
+            }
+        }
+        if (isset($e['lat'], $e['lon'])) {
+            $pos = [round((float) $e['lat'], 6), round((float) $e['lon'], 6)];
+        } elseif ($line !== []) {
+            $pos = $line[intdiv(count($line), 2)];
+        } else {
+            return null;
+        }
+
+        $hw = (string) ($tags['highway'] ?? '');
+        $type = $hw === 'elevator' ? 'elevator' : (isset($tags['conveying']) ? 'escalator' : 'steps');
+        if ($type === 'steps' && !isset($tags['level'])) {
+            return null;
+        }
+
+        $dir = null;
+        if ($type === 'escalator') {
+            $dir = match ((string) $tags['conveying']) {
+                'forward', 'yes' => 'forward',
+                'backward'       => 'backward',
+                default          => 'both',     // reversible: fährt mal so, mal so
+            };
+        }
+
+        return [
+            'type'   => $type,
+            'levels' => $levels,
+            'line'   => count($line) > 1 ? [$line[0], $line[count($line) - 1]] : [],
+            'pos'    => $pos,
+            'dir'    => $dir,
+            // Ein Aufzug ohne Rollstuhl-Angabe ist trotzdem ein Aufzug; die
+            // Angabe "wheelchair=no" dagegen ist wichtig.
+            'wheelchair' => isset($tags['wheelchair']) ? $tags['wheelchair'] !== 'no' : null,
+        ];
+    }
+
+    /**
+     * OSM-Ebenenangabe als Liste von Zahlen.
+     *
+     * Drei Schreibweisen kommen vor: einzeln ("-1"), aufgezählt ("0;-1")
+     * und als Bereich ("-2--1", "0-2"). Halbe Ebenen ("0.5") für
+     * Zwischengeschosse bleiben, wie sie sind.
+     *
+     * @return float[] absteigend sortiert
+     */
+    public static function parseLevels(string $raw): array
+    {
+        $out = [];
+        foreach (preg_split('/;/', $raw) ?: [] as $teil) {
+            $teil = trim($teil);
+            if ($teil === '') {
+                continue;
+            }
+            if (preg_match('/^(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)$/', $teil, $m)) {
+                $a = (float) $m[1];
+                $b = (float) $m[2];
+                [$lo, $hi] = $a <= $b ? [$a, $b] : [$b, $a];
+                if ($hi - $lo > 10) {
+                    continue; // offensichtlich kein Ebenenbereich
+                }
+                for ($v = $lo; $v <= $hi + 1e-9; $v += 1) {
+                    $out[(string) $v] = $v;
+                }
+                if (fmod($hi - $lo, 1.0) !== 0.0) {
+                    $out[(string) $hi] = $hi;
+                }
+            } elseif (is_numeric($teil)) {
+                $out[(string) (float) $teil] = (float) $teil;
+            }
+        }
+        $out = array_values($out);
+        rsort($out);
+        return $out;
     }
 
     /**

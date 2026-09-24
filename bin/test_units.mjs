@@ -233,6 +233,158 @@ pruefe('trainPosition rechnet auch ohne gemeldete Position hoch', (() => {
 })(), true);
 
 // ---------------------------------------------------------------------
+console.log('\nErsatz bei Ausfall — Brücke und Zusammenführung');
+{
+  const { bridgeOption, mergeAlternatives, spliceJourney } = await import('../public/assets/js/scoring.js');
+
+  // Ostbahnhof --S-Bahn (fällt aus)--> Hbf --ICE--> Frankfurt
+  const sbahn = {
+    mode: 'train', category: 'S', line: '8', trainNumber: '8123', cancelled: true,
+    from: { id: '8000262', name: 'München Ost', lat: 48.127, lon: 11.605 },
+    to:   { id: '8000261', name: 'München Hbf', lat: 48.140, lon: 11.558 },
+    departure: '2026-09-24T08:00:00+02:00', arrival: '2026-09-24T08:10:00+02:00',
+  };
+  const umstieg = { mode: 'walk', from: sbahn.to, to: sbahn.to,
+    departure: '2026-09-24T08:10:00+02:00', arrival: '2026-09-24T08:15:00+02:00' };
+  const ice = {
+    mode: 'train', category: 'ICE', line: '', trainNumber: '592', cancelled: false,
+    from: sbahn.to, to: { id: '8000105', name: 'Frankfurt Hbf' },
+    departure: '2026-09-24T08:28:00+02:00', arrival: '2026-09-24T11:40:00+02:00',
+  };
+  const reise = { id: 'r1', departure: sbahn.departure, arrival: ice.arrival,
+    legs: [sbahn, umstieg, ice] };
+
+  const u5 = (ab, an) => ({
+    id: 'mvg-1', departure: ab, arrival: an,
+    legs: [{ mode: 'train', category: 'U', line: 'U5', trainNumber: '',
+      from: sbahn.from, to: { name: 'Hauptbahnhof (U, Tram)' }, departure: ab, arrival: an }],
+    trains: ['U5'],
+  });
+
+  const passt = bridgeOption(reise, 0, u5('2026-09-24T08:02:00+02:00', '2026-09-24T08:12:00+02:00'));
+  pruefe('U-Bahn überbrückt den Ausfall, der ICE bleibt',
+    passt && passt.legs.map((l) => l.line || l.trainNumber || l.mode), ['U5', 'walk', '592']);
+  pruefe('überbrückte Reise kommt an wie geplant', passt?.arrival, ice.arrival);
+  pruefe('Beschriftung nennt Linie und ICE', passt?.trains, ['U5', 'ICE 592']);
+
+  const zuSpaet = bridgeOption(reise, 0, u5('2026-09-24T08:15:00+02:00', '2026-09-24T08:26:00+02:00'));
+  pruefe('Brücke, die den ICE nicht mehr erreicht, wird verworfen', zuSpaet, null);
+
+  const allein = { id: 'r2', departure: sbahn.departure, arrival: sbahn.arrival, legs: [sbahn] };
+  const nurBruecke = bridgeOption(allein, 0, u5('2026-09-24T08:02:00+02:00', '2026-09-24T08:12:00+02:00'));
+  pruefe('ist der Ausfall der letzte Abschnitt, genügt die Brücke', nurBruecke?.arrival,
+    '2026-09-24T08:12:00+02:00');
+  pruefe('„weiter wie geplant" nur, wenn danach noch etwas wie geplant fährt',
+    [passt?.bridged, nurBruecke?.bridged], [true, false]);
+
+  const zusammen = spliceJourney(reise, 0, passt);
+  pruefe('übernommen: keine ausgefallene S-Bahn mehr in der Reise',
+    zusammen.legs.some((l) => l.cancelled), false);
+
+  const gemischt = mergeAlternatives([
+    { departure: '2026-09-24T08:05:00', arrival: '2026-09-24T08:20:00', trains: ['S6'] },
+    { departure: '2026-09-24T08:02:00', arrival: '2026-09-24T08:12:00', trains: ['U5'] },
+    { departure: '2026-09-24T08:05:00', arrival: '2026-09-24T08:20:00', trains: ['S6'] },
+  ], 4);
+  pruefe('nach Ankunft sortiert, Doppeltes aus MVG und HAFAS einmal',
+    gemischt.map((o) => o.trains[0]), ['U5', 'S6']);
+}
+
+// ---------------------------------------------------------------------
+console.log('\nBenachrichtigungen — was ist neu, was nur Rauschen?');
+
+{
+  const jetzt = Date.now();
+  const iso = (min) => new Date(jetzt + min * 60000).toISOString();
+  // Ein ICE, der in 20 Minuten in München Hbf abfährt, mit Zuglauf.
+  const leg = zug({
+    category: 'ICE', trainNumber: '724', line: '724',
+    from: { id: '8000261', name: 'München Hbf', platform: '12' },
+    to: { id: '8000105', name: 'Frankfurt(Main)Hbf' },
+    departure: iso(20), arrival: iso(260),
+  });
+  const lauf = (verspaetung, gleis) => ({
+    delay: verspaetung,
+    stops: [
+      { id: '8000261', name: 'München Hbf', departure: iso(20), departureReal: iso(20 + verspaetung), platform: gleis },
+      { id: '8000105', name: 'Frankfurt(Main)Hbf', arrival: iso(260), arrivalReal: iso(260 + verspaetung) },
+    ],
+  });
+  const tracker = (data) => Object.assign(Object.create(LiveTracker.prototype), {
+    legs: [{ leg, jid: 'x', data }], risk: null,
+    alerted: new Map(), alertBaseline: true, notify: true,
+  });
+
+  pruefe('Verspätung aus dem Zuglauf, nicht aus der alten Suche',
+    LiveTracker.liveDelay({ leg: { ...leg, departureReal: iso(21) }, data: lauf(12, '12') }), 12);
+  pruefe('Gleiswechsel erkannt',
+    LiveTracker.platformChange({ leg, data: lauf(0, '14') }), { planned: '12', now: '14' });
+  pruefe('gleiches Gleis ist kein Wechsel',
+    LiveTracker.platformChange({ leg, data: lauf(0, '12') }), null);
+
+  const t = tracker(lauf(3, '12'));
+  pruefe('drei Minuten sind keine Meldung', t.collectAlerts().length, 0);
+  t.legs[0].data = lauf(7, '14');
+  const a = t.collectAlerts();
+  pruefe('ab fünf Minuten: Verspätung (Stufe 5) und Gleiswechsel',
+    a.map((x) => [x.key.split('|')[0], x.level]), [['delay', 5], ['gleis', 1]]);
+
+  // Der erste Stand wird nur notiert; danach meldet nur, was neu ist oder
+  // eine höhere Stufe erreicht.
+  const gemeldet = [];
+  const orig = LiveTracker.showNotification;
+  LiveTracker.showNotification = (title) => { gemeldet.push(title); };
+  t.checkAlerts();
+  pruefe('erster Stand: nichts gemeldet', gemeldet.length, 0);
+  t.legs[0].data = lauf(9, '14');
+  t.checkAlerts();
+  pruefe('9 statt 7 min: dieselbe Stufe, keine neue Meldung', gemeldet.length, 0);
+  t.legs[0].data = lauf(11, '14');
+  t.checkAlerts();
+  pruefe('11 min: nächste Stufe, eine Meldung', gemeldet, ['ICE 724: +11 min']);
+  LiveTracker.showNotification = orig;
+}
+
+// ---------------------------------------------------------------------
+console.log('\nLive-Verfolgung — auch U-Bahn und Tram');
+
+pruefe('Zuglauf-Kennung von HAFAS zuerst',
+  LiveTracker.sourceOf(zug({ jid: 'x', dbJourneyId: 'y' })), 'hafas');
+pruefe('DB-Fahrplan: der Zuglauf der DB',
+  LiveTracker.sourceOf(zug({ dbJourneyId: 'y', line: 'U1' })), 'db');
+pruefe('MVG-Verbindung: die Abfahrtstafel der MVG',
+  LiveTracker.sourceOf(zug({ line: 'U3', from: { id: 'mvg:de:09162:60' }, to: { id: 'mvg:de:09162:40' } })), 'mvg');
+pruefe('ohne jede Kennung: nichts nachzuladen',
+  LiveTracker.sourceOf(zug({ line: 'U3', from: { id: '625176' }, to: { id: '8000261' } })), null);
+{
+  const halte = [
+    { name: 'Odeonsplatz', departure: '2026-09-24T09:00:00+02:00' },
+    { name: 'Marienplatz', arrival: '2026-09-24T09:02:00+02:00', departure: '2026-09-24T09:02:00+02:00' },
+    { name: 'Goetheplatz', arrival: '2026-09-24T09:05:00+02:00' },
+  ];
+  const lauf = { hasRealtime: true, delay: 2, stops: [
+    { departureReal: '2026-09-24T09:02:00+02:00', platform: '2' },
+    { arrivalReal: '2026-09-24T09:07:00+02:00' },
+  ] };
+  const m = LiveTracker.mergeStops(halte, lauf);
+  pruefe('MVG: alle Halte bleiben, dazwischen um die Verspätung verschoben',
+    [m.length, new Date(m[1].arrivalReal).getTime() - new Date(halte[1].arrival).getTime(), m[0].platform],
+    [3, 2 * 60000, '2']);
+}
+
+// ---------------------------------------------------------------------
+console.log('\nAbfahrtstafel — Filtergruppen');
+
+{
+  const { groupOf } = await import('../public/assets/js/board.js');
+  pruefe('ICE → Fernverkehr', groupOf({ category: 'ICE', trainNumber: '722' }), 'fern');
+  pruefe('HAFAS-S-Bahn "DB" mit Linie S1 → S-Bahn', groupOf({ category: 'DB', line: 'S1' }), 'S');
+  pruefe('MVG-U-Bahn → U-Bahn', groupOf({ category: 'U', line: 'U5' }), 'U');
+  pruefe('RB16 → Regional', groupOf({ category: 'RB', line: 'RB16' }), 'regio');
+  pruefe('Tram 19 → Tram', groupOf({ category: 'Tram', line: '19' }), 'Tram');
+}
+
+// ---------------------------------------------------------------------
 console.log('\nImporte — benutzt, aber nicht geholt?');
 
 // ZWEIMAL ist genau dieser Fehler durchgerutscht: `sameTrain` und

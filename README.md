@@ -12,8 +12,14 @@ nach Preis und Dauer, sondern auch danach, in welchem Zug du sitzt. Mit Abo-Ausw
 
 Dazu eine Routenkarte, ein Verkehrsmittel-Filter (Bus und
 Schienenersatzverkehr lassen sich vorab ausschließen), eine **Live-Verfolgung**
-der gewählten Verbindung samt GPS-Mitfahrt und Buchungslinks zu SBB, DB oder
-ÖBB, je nachdem welche Länder die Reise berührt.
+der gewählten Verbindung samt GPS-Mitfahrt und Benachrichtigung bei Ausfall,
+Verspätung oder Gleiswechsel, und Buchungslinks zu SBB, DB oder ÖBB, je
+nachdem welche Länder die Reise berührt.
+
+Neben der Suche gibt es eine **Abfahrtstafel** als eigenen Tab, **Favoriten**
+für die Orte, die man oft fährt, **Stadtfahrten in München** mit U-Bahn,
+Tram und Bus, alle **Tarife der DB** samt Bedingungen, und die App läuft auch
+**offline** mit dem zuletzt geladenen Stand weiter.
 
 Gebaut als statisches Frontend plus schlankes PHP-Backend, damit du den Ordner
 einfach auf deinen Webspace ziehen kannst. Die Oberfläche ist für Telefone
@@ -28,10 +34,12 @@ Karte wechselt auf schmalen Bildschirmen ins Hochformat.
 |---|---|---|---|---|
 | ÖBB HAFAS | ja | ja, sehr detailliert | ja (Karte) | nein, nur Shop-Link |
 | DB bahn.de | ja | ja | nein | **ja** |
-| MVG (München) | nein* | Linien-Label | nur Halt-Koordinaten | nein |
+| MVG (München) | ja, im MVV* | Linien-Label | ja (Polylinie) | nein, Tarifzonen |
 
-*MVG liefert Ortssuche und Störungsmeldungen für den Münchner Nahverkehr, aber
-keine Verbindungssuche. Details unter [Münchner Nahverkehr](#münchner-nahverkehr-über-die-mvg-api).
+*Die MVG liefert Ortssuche, Störungsmeldungen, Abfahrten und Verbindungen im
+Münchner Nahverkehr — für Stadtfahrten, als Zubringer zum Fernzug und als
+Ersatz bei einem Ausfall. Details unter [Münchner Nahverkehr](#münchner-nahverkehr-über-die-mvg-api)
+und [Stadtfahrten](#stadtfahrten-und-zubringer-in-münchen).
 
 ### Preise: warum nur die DB
 
@@ -285,6 +293,49 @@ Geblieben ist damit die Frage, die sich überhaupt beantworten lässt — *liege
 die beiden Bahnsteige nebeneinander oder an entgegengesetzten Enden?* Wo beide
 Gleisnummern bekannt sind, sind sie hervorgehoben; ein Ebenenwechsel wird
 dazugesagt, denn der kostet mehr Zeit, als die Entfernung vermuten lässt.
+
+#### Treppen, Rolltreppen und Aufzüge je Ebene
+
+Zwischen „nur die Lage" und „ein berechneter Weg, den es so nicht gibt" liegt
+etwas, das OSM verlässlich hat: **die Stellen, an denen es die Ebene
+wechselt.** Treppen, Rolltreppen und Aufzüge sind an großen Bahnhöfen fast
+vollständig und mit Ebene erfasst — nachgezählt im Umkreis von 250 m:
+
+| Bahnhof | Aufzüge | Treppen | Rolltreppen | davon mit Ebene |
+|---|---|---|---|---|
+| Zürich HB | 20 | 48 | 81 | 143 von 149 |
+| München Hbf | 8 | 65 | 63 | 127 von 136 |
+| Mannheim Hbf | 11 | 31 | 14 | 43 von 56 |
+
+Sie kommen in derselben Overpass-Abfrage mit (zweiter Block, `out tags geom`,
+weil eine Rolltreppe ohne Geometrie keine Fahrtrichtung hat) und stehen je
+Ebene im Plan:
+
+- Die Karte beginnt auf der **Ebene des Ankunftsgleises**. Hervorgehoben ist,
+  was von dort Richtung Abfahrtsgleis führt — liegt es tiefer, alles, was
+  nach unten geht. Mit ▲ ▼ folgt man dem Weg Ebene für Ebene; Zürich Gleis 8
+  (Ebene 0) → Gleis 33 (Ebene −4) führt so über die Rolltreppen ins
+  Untergeschoss und weiter hinunter.
+- Rolltreppen tragen einen **Pfeil in Fahrtrichtung** (`conveying`), neben
+  jedem Verbinder steht, zu welcher Ebene er führt.
+- Ebenen, auf denen es keinen Bahnsteig gibt, aber zu denen Treppen führen,
+  sind jetzt im Umschalter — das Untergeschoss ist oft genau der Weg. Nicht
+  dagegen die Bürohäuser nebenan: gezählt wird von zwei Ebenen unter dem
+  tiefsten bis eine über dem höchsten Bahnsteig (in Zürich kamen sonst
+  Aufzüge bis zum fünften Stock dazu).
+- Treppen **ohne** Ebenenangabe bleiben draußen — das sind fast immer Stufen
+  im Straßenraum vor dem Bahnhof.
+
+Einen Laufweg zeichnet der Plan weiterhin nicht. Die Gänge zwischen den
+Treppen sind in OSM zu lückenhaft; siehe oben.
+
+**Die SBB kann mehr — aber nicht frei.** Die exakten Wege über mehrere Etagen
+in der SBB-App kommen aus der *Journey Maps*-API (`/v1/transfer`, „ROKAS
+enhanced pedestrian routing"; dazu `/v1/master-data/…/floor-connectors`).
+Nachgesehen im [SBB-Developer-Portal](https://developer.sbb.ch/apis/journey-maps-apikey/documentation):
+alle Tarife „Approval required", die Variante mit API-Schlüssel ist als
+*deprecated* markiert, und die Daten decken nur Schweizer Bahnhöfe ab. Ohne
+freigeschalteten Zugang lässt sich das weder einbauen noch testen.
 
 Weggefallen sind mit dem Weg auch `StationPlan.php` und die Fußwege in der
 Overpass-Abfrage. Letztere waren der größte Teil der Antwort — die Abfrage ist
@@ -902,6 +953,55 @@ unter der Karte**, der Knopf steht auf einer Verbindungskarte weiter unten. Bei
 der fünften Verbindung liegt zwischen beiden eine Bildschirmhöhe, und ein Klick
 schien nichts zu tun. Jetzt springt die Seite hin — im nächsten Frame, denn das
 Neuzeichnen der Trefferliste ändert vorher die Seitenhöhe.
+
+#### Auch U-Bahn, Tram und Bus
+
+Die Verfolgung lud den Zuglauf nur über die HAFAS-`jid` — und die fehlt
+genau dort, wo man sie in München bräuchte: U-Bahn, Tram und Bus kennt
+HAFAS nicht, ihr Fahrplan kommt von der DB oder der MVG. Dort stand deshalb
+immer „keine Echtzeitdaten". Jetzt gibt es drei Quellen
+(`LiveTracker.sourceOf()`):
+
+| Quelle | wofür | wie |
+|---|---|---|
+| **HAFAS** (`jid`) | Fernverkehr, Regionalzug, S-Bahn | wie bisher |
+| **DB** (`dbJourneyId`) | alles mit DB-Fahrplan, also auch U-Bahn und Tram | `/web/api/reiseloesung/fahrt` — der Zuglauf-Endpunkt von bahn.de, Soll- und Ist-Zeit je Halt, rund 0,2 s |
+| **MVG** | Abschnitte aus der MVG-Suche (Stadtfahrt, Zubringer) | die Abfahrtstafel an Ein- und Ausstieg: die eigene Bahn über Linie und Planminute, am Ausstieg über dieselbe Fahrtnummer (`tripCode`) |
+
+Die MVG meldet dabei nur Ein- und Ausstieg; die Halte dazwischen kommen aus
+der Verbindung und werden um die gemeldete Verspätung verschoben. So bleiben
+Halteliste und geschätzte Position auf der Karte vollständig. Echtzeit gibt
+die MVG erst kurz vor der Abfahrt heraus — eine U-Bahn in zehn Minuten hat
+noch keine.
+
+Dazu zwei Verbesserungen, die jeden Zug betreffen:
+
+- **Die Münchner S-Bahn kennt HAFAS oft nur nach Fahrplan.** Hat die DB für
+  denselben Zug Ist-Zeiten, gelten jetzt die (`dbJourneyId` kommt beim
+  Abgleich mit der DB an jeden Abschnitt).
+- **Die Verspätung am Abschnitt kommt aus dem nachgeladenen Zuglauf**, nicht
+  mehr aus den Ist-Zeiten der Suche. Die standen nach einer halben Stunde
+  Fahrt noch auf dem alten Stand — eine U2 mit +1 min stand als „pünktlich"
+  da.
+
+Nachgeprüft: Sendlinger Tor → Hauptbahnhof (U2, DB-Fahrplan) zeigte die
+Ist-Zeiten je Halt; Odeonsplatz → Goetheplatz (U6, MVG) −1 min am Einstieg
+und am Ausstieg, wiedergefunden über die Fahrtnummer.
+
+#### Die gelben Kästen sind kurz
+
+Die Meldungen in der Verfolgung waren zu lang. Die MVG schickt zu jeder
+Störung einen Fließtext mit — Ursache, betroffene Halte, Ersatzverkehr,
+Umleitungen, oft mehrere Absätze —, und der stand vollständig da; auf dem
+Telefon schob eine einzige Meldung die Zugabschnitte aus dem Bild. Jetzt:
+
+- MVG-Meldungen zeigen nur die Überschrift, höchstens zwei Zeilen; „mehr"
+  klappt den Text auf. Ab der dritten sind sie gebündelt.
+- Meldungen am Zug sind auf zwei Zeilen gekürzt (vorher vier), ein Tipp
+  zeigt den ganzen Satz.
+- Von den Alternativen stehen zwei sofort da, der Rest ist einen Tipp
+  entfernt — vier Vorschläge füllten vorher den Bildschirm, bevor man sah,
+  welcher Zug betroffen ist.
 
 #### Jeder Abschnitt erscheint, sobald er da ist
 
@@ -1576,9 +1676,10 @@ Für München gibt es **zwei Lücken**, die die MVG-Web-API schließt:
    fragt deshalb zusätzlich `https://www.mvg.de/api/bgw-pt/v3/locations`
    und mischt Treffer mit MVG-Präfix `mvg:` in die Liste. HAFAS-Treffer
    mit identischem Namen absorbieren die MVG-Ergänzung; nur reine
-   MVG-Halte bleiben eigenständig. Sie erhalten das Flag `noJourneys=true`,
-   weil sich mit der MVG-`globalId` keine Verbindung anrouten lässt
-   (HAFAS akzeptiert nur EVA-Nummern).
+   MVG-Halte bleiben eigenständig. Sie tragen noch das Flag
+   `noJourneys=true` (HAFAS akzeptiert nur EVA-Nummern), suchbar sind sie
+   inzwischen trotzdem — über die MVG selbst, siehe
+   [Stadtfahrten](#stadtfahrten-und-zubringer-in-münchen).
 
 2. **Aktuelle Störungsmeldungen** (`?action=disruptions`) — Baustellen,
    Ausfälle, Umleitungen für U-Bahn, Tram, Bus, S-Bahn. Das Frontend blendet
@@ -1591,11 +1692,273 @@ wir identifizieren uns per `User-Agent` (konfigurierbar in `config.php`).
 Ausschalten geht per `providers.mvg.enabled = false` — dann verschwindet der
 Ticker und die Ortssuche fällt auf HAFAS-only zurück.
 
-**Was die MVG-API nicht kann:** eine Verbindungssuche. Es gibt keinen
-`/trips`- oder `/journeys`-Endpunkt (getestet). Für die Fahrplanauskunft
-zwischen zwei MVG-Halten muss weiterhin HAFAS herhalten — und HAFAS versteht
-die MVG-IDs nicht. In der Praxis ist das selten ein Problem, weil HAFAS
-München S-Bahn/Fernverkehr ohnehin sauber abbildet.
+3. **Ersatzwege bei einem Ausfall** (`?action=localroute`). Hier stand lange,
+   die MVG-API habe keine Verbindungssuche — gesucht worden war nach
+   `/trips`. Sie heisst `/routes`, und sie ist in München unersetzlich:
+   **die Fahrplanquelle der ÖBB kennt die Münchner U-Bahn nicht.** Odeonsplatz
+   führt dort nur Produktklasse 2, Marienplatz nur die S-Bahn. Fällt die
+   S-Bahn-Stammstrecke aus, konnte die App deshalb nur weitere S-Bahnen
+   anbieten — die ebenfalls ausfallen — und nie die U-Bahn, mit der man
+   tatsächlich zum Hauptbahnhof kommt.
+
+   Weil die MVG keine EVA-Nummern versteht, wird zwischen **Punkten** gesucht:
+   beide Enden des ausgefallenen Abschnitts werden über `/stations/nearby`
+   auf die nächste MVG-Haltestelle abgebildet. Dabei gilt **Bahnhalt vor
+   Bushalt**: nach Entfernung allein gewann am Ostbahnhof die Bushaltestelle
+   „Friedenstraße" (106 m, von der MVG obendrein als `BAHN,BUS` geführt) vor
+   dem Bahnhof (134 m), und die MVG plante acht Minuten Fussweg zur S-Bahn und
+   drei zurück zur Tram ein — jede Ersatzverbindung verpasste dadurch den
+   Anschlusszug. S- und U-Bahn gehen jetzt vor, blosses `BAHN` danach, alles
+   andere zuletzt.
+
+Die MVG-API läuft ohne Auth und ist ausdrücklich für die MVG-Web-App gedacht;
+wir identifizieren uns per `User-Agent` (konfigurierbar in `config.php`).
+Ausschalten geht per `providers.mvg.enabled = false` — dann verschwindet der
+Ticker, die Ortssuche fällt auf HAFAS-only zurück, und bei Ausfällen gibt es
+nur noch die Ersatzverbindungen über HAFAS.
+
+### Ersatz, wenn ein Zug ausfällt
+
+Vorher stand an einem ausgefallenen Zug „Dieser Zug fällt aus" — und dann
+nichts. Im Betrieb hiess das: S-Bahn-Stammstrecke gesperrt, die App wusste es,
+und man stand ohne Vorschlag da. Drei Lücken lagen hintereinander:
+
+1. **Nachgeladen wurde nur bei knappen Umstiegen.** Die Ersatzsuche in der
+   Trefferliste startete ausschliesslich bei 1–4 Minuten Umsteigezeit — ein
+   ausgefallener Zug ist aber nicht knapp, er ist weg.
+2. **Ersatz, der selbst ausfällt.** Die Suche schloss nur die *eine*
+   Zugnummer aus. Bei einer gesperrten Strecke fällt die nächste S-Bahn auf
+   derselben Linie genauso aus — und kam als „Alternative" zurück. Jetzt
+   fliegt jede Verbindung mit einem ausgefallenen Abschnitt heraus.
+3. **Die U-Bahn fehlte in der Quelle** — siehe oben.
+
+Jetzt kommen an jedem ausgefallenen Zug zwei Sorten Ersatz, zusammengeführt
+und nach Ankunft sortiert:
+
+| Art | Quelle | was sie leistet |
+|---|---|---|
+| **Überbrückung** | MVG | vom Einstieg des ausgefallenen Zuges bis zu seinem Ausstieg — und danach die Reise **wie geplant**. Der gebuchte ICE ab München Hbf fährt ja trotzdem. Nur angeboten, wenn sie den nächsten Zug mit mindestens drei Minuten Puffer erreicht; höchstens zwei, weil sie sich oft nur um zwei Minuten Abfahrt unterscheiden |
+| **Neue Verbindung** | HAFAS | vom Einstieg bis zum Ziel, überall, und auch dort, wo die Brücke den Anschluss nicht mehr schafft |
+
+Jede ist mit einem Klick übernehmbar, und die Übernahme ist rückgängig zu
+machen. Dasselbe gilt in der Live-Verfolgung: meldet sie „Zug fällt aus",
+stehen darunter dieselben beiden Sorten Ersatz.
+
+Nachgestellt mit einer als ausgefallen markierten S2 München Ost → Hbf vor
+einem ICE nach Frankfurt: zwei Brücken, die den ICE 724 noch erreichen
+(Ankunft 12:02 wie geplant), dazu Neuverbindungen mit +7 und +38 Minuten.
+Übernommen enthält die Verbindung keinen ausgefallenen Abschnitt mehr.
+
+**Wie ein Zug in den Vorschlägen heisst**, bestimmt jetzt dieselbe Regel wie
+überall sonst (`trainLabel`). Die Beschriftung des Servers schrieb „DB S5" —
+HAFAS führt die Münchner S-Bahn unter der Gattung „DB" — und für MVG-Linien
+wegen `trainNumber ?? line` mit leerem String nur „U" statt „U5".
+
+### Echtzeit-Routing
+
+HAFAS sucht normalerweise mit dem **Fahrplan** und rechnet die Echtzeitlage
+erst hinterher dazu. Eine Verbindung, deren Anschluss eine Verspätung längst
+gekappt hat, stand deshalb unauffällig in der Liste — HAFAS markierte sie
+zwar (`isNotRdbl`), gelesen wurde das Feld aber nie.
+
+Zwei Dinge sind jetzt anders:
+
+- **Suchen für die nächsten Stunden laufen mit `rtMode: REALTIME`.** Dann
+  routet HAFAS mit der Echtzeitlage: nicht mehr erreichbare Verbindungen
+  fallen weg, ausgefallene Züge werden umfahren. Nachgemessen am ÖBB-Server:
+  der Schalter gehört in `cfg`, nicht in `req` (dort „Parser error"), und
+  von den Werten anderer HAFAS-Server gehen `SERVER_DEFAULT`, `REALTIME` und
+  `FULL`, `HYBRID` nicht. München Ost → Frankfurt gegen 22:30: im
+  Fahrplanmodus acht Treffer, darunter eine S6 mit geplatztem Anschluss an
+  den ICE 618 — mit Echtzeit sechs, ohne sie. Gilt für Abfahrten von einer
+  Stunde zurück bis drei Stunden voraus (`isNearNow()`); weiter reicht keine
+  Prognose. Findet die Echtzeitsuche gar nichts, zeigt der Fahrplan
+  wenigstens, was fahren sollte.
+- **Die Ersatzsuche (`nextconnection`) läuft immer mit Echtzeit** — sie
+  sucht den Weg jetzt, um einen Ausfall herum.
+
+Dazu: **Ein Zug, der am eigenen Halt nicht hält, fällt für diese Reise aus.**
+Gezählt wurde nur `isCncl` (der ganze Zug fällt aus). Bei einer gesperrten
+Stammstrecke fährt die S-Bahn aber — sie endet nur vorzeitig, und am
+Marienplatz steht `aCncl`/`dCncl` am Halt. Das zählt jetzt mit, und was
+HAFAS als nicht erreichbar meldet, trägt in der Liste das Abzeichen „laut
+Echtzeit nicht erreichbar".
+
+### Stadtfahrten und Zubringer in München
+
+Die Ortssuche fand „Odeonsplatz" schon lange — die Suche lehnte ihn dann ab:
+„Halt ohne Fahrplan". Die Fahrplanquelle der ÖBB kennt die Münchner U-Bahn
+nicht. Jetzt übernimmt die MVG, in zwei Fällen (`lib/CityTrips.php`):
+
+| Fall | Beispiel | wer sucht |
+|---|---|---|
+| **Stadtfahrt** — beide Enden im MVG-Netz | Odeonsplatz → Karlsplatz | die MVG; sind beide Enden zugleich HAFAS-Bahnhöfe (Hbf → Ostbahnhof), auch HAFAS, und die Treffer werden zusammengeführt |
+| **Zubringer** — ein Ende ist ein reiner MVG-Halt, das andere woanders | Odeonsplatz → Frankfurt | HAFAS ab bzw. bis München Hbf, die MVG das Stück in der Stadt |
+
+Beim Zubringer wird **rückwärts** gerechnet: je Fernverbindung fragt die App
+die MVG „wann muss ich am Odeonsplatz los, um am Hauptbahnhof sechs Minuten
+vor dem ICE zu sein?" (`routingDateTimeIsArrival=true`). Alle diese Fragen
+laufen gleichzeitig (`Mvg::routesMany`), eine Suche kostet so rund eine
+zusätzliche Sekunde. Auf der ersten Seite verschiebt sich die Uhrzeit der
+Fernsuche um die Fahrt in der Stadt — wer um 8:00 am Odeonsplatz losfährt,
+erreicht keinen ICE um 8:01. Die sechs Minuten Umstieg sind Absicht: vom
+U-Bahnsteig unter dem Hauptbahnhof zu Gleis 11–26 sind es zwei Rolltreppen
+und die Querhalle.
+
+Was die Verbindungen mitbringen:
+
+- **Kein Preis, sondern die Tarifzone** („MVV · Zone M"). Die MVG nennt die
+  Zonen, einen Betrag nicht, und schätzen wäre hier Raten. Beim Zubringer
+  steht unter dem Preis des Fernzugs „+ MVV Zone M" — im Flexpreis der DB
+  ist das City-Ticket enthalten, mit Deutschlandticket fährt man ohnehin.
+- **Deutschlandticket**: gilt im ganzen MVV und steht deshalb an jedem
+  MVG-Abschnitt.
+- **Echtzeit und Streckenverlauf** aus der MVG-Antwort — die Karte zeigt die
+  U-Bahn auf ihrer Strecke, nicht als Luftlinie.
+- **Gestörte Aufzüge und Rolltreppen** an Ein- und Ausstieg (die MVG meldet
+  sie je Halt), wie bei den Meldungen der DB.
+
+**Blättern** geht auch ohne Blätterkontext der MVG: der Zeitpunkt selbst wird
+zum Kontext (`mvg|2026-09-24|09:15`), und die Verbindungen tragen eine aus
+Abfahrt, Ankunft und Linien gebildete Kennung — die `uniqueId` der MVG
+bezeichnet eine Antwort, nicht eine Fahrt, und beim Weiterblättern stünde
+dieselbe U-Bahn sonst zweimal da.
+
+Ob ein HAFAS-Bahnhof im MVG-Netz liegt, entscheidet erst ein grober Rahmen
+(Ammersee bis Erding, Freising bis Wolfratshausen), dann `nearestStation()`.
+Das Ergebnis wird eine Woche gemerkt — Haltestellen ziehen nicht um, und
+Zürich–Wien soll keine MVG-Abfrage kosten.
+
+### Abfahrtstafel
+
+Der zweite Tab oben. Wer am Bahnsteig steht oder gestrandet ist, fragt
+nicht „wie komme ich nach X", sondern „was fährt hier als Nächstes".
+
+- **Quelle ist HAFAS** (`StationBoard`, 0,2 s) für jeden Bahnhof in CH, DE
+  und AT — Abfahrten und Ankünfte, mit Ist-Zeit, Gleis, Gleiswechsel und
+  Ausfall.
+- **In München kommt die MVG dazu**, und zwar mit **allen** ihren Halten des
+  Bahnhofs: am Hauptbahnhof sind das vier (S-Bahn, „Hauptbahnhof (U, Tram)",
+  „Süd", „Nord"). HAFAS kennt die U-Bahn nicht und hat für die Münchner
+  S-Bahn oft nur den Fahrplan; die MVG hat für beides Echtzeit. Eine S-Bahn,
+  die beide nennen, steht einmal da — mit der `jid` von HAFAS und der
+  Ist-Zeit der MVG. Die Linie wird dafür ohne Leerzeichen verglichen: „RB 16"
+  (MVG) und „RB16" (HAFAS) sind derselbe Zug.
+- **Ein Tipp auf eine Zeile** zeigt den Zuglauf ab hier (bei Ankünften: bis
+  hier). Die S-Bahn hält in „München Hbf (tief)" — gesucht wurde „München
+  Hbf"; auch das wird erkannt.
+- Filter nach Fernverkehr, Regional, S-Bahn, U-Bahn, Tram und Bus — nur die,
+  die an diesem Bahnhof auch vorkommen.
+- Frischt sich jede Minute auf, solange die Tafel sichtbar ist und „jetzt"
+  zeigt.
+
+Die Ansicht steht in der Adresse (`#abfahrten`) und übersteht so ein
+Neuladen.
+
+### Tarife, Ausstattung und Aufzüge von der DB
+
+Die DB liefert mehr, als die Trefferliste bisher zeigte. Nachgemessen, was in
+den Antworten steckt:
+
+**Alle Tarife einer Verbindung** (`?action=offers`). Die Suche nennt nur den
+günstigsten Preis — meist einen Super Sparpreis mit Zugbindung, ohne dass das
+dasteht. Mit dem `ctxRecon` der Verbindung liefert
+`/web/api/angebote/recon` alle Angebote: Super Sparpreis, Sparpreis und
+Flexpreis in beiden Klassen, jeweils mit Zugbindung, Storno und City-Ticket,
+dazu den Preis einer Sitzplatzreservierung. München → Frankfurt, 2. Klasse:
+79,99 / 88,99 / 118,80 €, Reservierung 5,50 €. Die Antwort ist über 100 kB
+groß, deshalb lädt die App sie erst, wenn man „Tarife und Bedingungen"
+aufklappt.
+
+Ein Fallstrick: **der Rabatt-Hinweis bedeutet zweierlei.** Mit BahnCard im
+Profil steht er an den eigenen Preisen. Ohne BahnCard hängt er an
+zusätzlichen Angeboten, die erst mit einer Probe-BahnCard gelten — in
+derselben Liste stehen dann 79,99 € und „59,99 € (20 € Ersparnis durch
+BahnCard)". Diese stehen deshalb getrennt darunter: „Mit BahnCard ab …".
+
+**Zugausstattung** aus den `zugattribute`: Bordrestaurant bzw. -bistro, WLAN,
+Steckdosen, Fahrradmitnahme, Rollstuhlplatz, Komfort-Check-in. Von rund
+vierzig Schlüsseln bleiben die, die die Reise betreffen; was sie
+**verhindern** kann, steht farbig vorn — Reservierungspflicht, nur 2. Klasse,
+„DB-Fahrscheine gelten nicht", Deutschlandticket gilt nicht, Ersatzverkehr.
+Werbung wie „Intercity 2: Info unter www.bahn.de/ic2" fliegt raus.
+
+**Gestörte Aufzüge am Ein- und Ausstieg.** Die DB hängt an jeden Abschnitt
+alle Meldungen seiner Halte (`himMeldungen`), darunter solche wie „Hamburg
+Hbf: Aufgrund einer Aufzugserneuerung Gleis 13/14 steht dieser … nicht zur
+Verfügung". Behalten wird, was die Barrierefreiheit betrifft **und** mit dem
+Namen des eigenen Ein- oder Ausstiegs beginnt — der Aufzug in Celle, an dem
+man sitzen bleibt, gehört nicht dazu. Die Meldung steht unter dem Halt, auf
+zwei Zeilen gekürzt, ein Tipp zeigt sie ganz.
+
+Nicht verwendet: `samePlatform` an den Abschnitten. Es stand in Stichproben
+auch an Abschnitten ohne Umstieg davor; ohne klare Bedeutung lieber nicht.
+
+### Benachrichtigungen unterwegs
+
+Die Live-Verfolgung hat einen Knopf **„Benachrichtigen"**. Danach meldet sie
+von selbst:
+
+- **Ausfall** und **geplatzten oder knappen Anschluss** — dieselbe Warnung wie
+  im Panel,
+- **Verspätung ab fünf Minuten**, danach nur in Fünferstufen. Jede Minute zu
+  melden wäre Lärm: bei einer langsam wachsenden Verspätung klingelte das
+  Telefon im Halbminutentakt.
+- **Gleiswechsel** an einem noch bevorstehenden Einstieg.
+
+Was beim Einschalten schon so ist, wird nicht gemeldet — das steht im Panel,
+das man gerade ansieht. Die Verspätung kommt dabei aus dem **nachgeladenen
+Zuglauf**, nicht aus den Ist-Zeiten der Suche; die sind nach einer halben
+Stunde Fahrt veraltet.
+
+Gezeigt wird die Benachrichtigung über den Service Worker (Chrome auf
+Android kennt nur diesen Weg), ein Tipp darauf bringt zur App zurück.
+
+**Grenzen, ehrlich:** Das ist kein Push-Dienst mit eigenem Server. Die Seite
+muss offen sein — im Hintergrund-Tab frischt sie weiter auf, so gut der
+Browser lässt (Chrome drosselt Zeitgeber dort auf einmal pro Minute), aber
+ein Telefon mit dunklem Bildschirm friert die Seite irgendwann ganz ein. Auf
+dem iPhone gibt es Benachrichtigungen nur, wenn die App über „Zum
+Home-Bildschirm" installiert ist (iOS 16.4+). Und nur über HTTPS.
+
+### Favoriten
+
+Ein **Stern** neben „Von" und „Nach" merkt den gewählten Bahnhof, ebenso der
+Stern in der Vorschlagsliste. Favoriten stehen dann als Knöpfe unter den
+Feldern: ein Tipp setzt den Ort ins zuletzt benutzte Feld, ohne angefasstes
+Feld erst in „Von", dann in „Nach" — zwei Tipps ergeben eine Strecke. Tippt
+man in ein leeres Feld, stehen Favoriten und die zuletzt benutzten Orte
+schon in der Vorschlagsliste. Dieselben Favoriten gelten in der
+Abfahrtstafel. Alles liegt im Browser, nichts geht an den Server.
+
+### Offline
+
+Die App ist installierbar (`manifest.webmanifest`) und läuft ohne Netz
+weiter (`sw.js`):
+
+- Die Seite lädt, die verfolgte Verbindung steht da (sie liegt ohnehin im
+  `localStorage`), und alles, was zuletzt vom eigenen Backend kam —
+  Suchergebnisse, Zugläufe, Abfahrtstafeln, Bahnhofspläne, Tarife —, kommt
+  aus dem Zwischenspeicher. Oben steht dann „Offline — gezeigt wird der
+  zuletzt geladene Stand", an der Suche „offline, gespeicherter Stand", und
+  die Live-Verfolgung nennt die Uhrzeit des letzten echten Standes statt
+  einer frischen.
+- **Netz zuerst, immer**, auch für HTML, CSS und JS. Ein Service Worker, der
+  aus dem Cache ausliefert, würde jedes Update verschlucken — genau das
+  Problem, das `.htaccess` mit `no-cache` gelöst hat. Der Cache springt nur
+  ein, wenn das Netz nicht antwortet.
+- **Kartenkacheln werden nicht gespeichert.** Sie kommen als `<img>` ohne
+  CORS, also als „opake" Antworten, und die rechnet Chrome mit je rund 7 MB
+  auf das Speicherkontingent an. Die Route liegt als SVG über der Karte und
+  ist auch ohne Kacheln zu sehen.
+- Höchstens 150 Backend-Antworten, die ältesten fliegen raus. Positionen der
+  Live-Züge werden nie gespeichert: eine Stunde alt sind sie nicht alt,
+  sondern falsch.
+
+Nachgeprüft, indem der Server abgeschaltet wurde: Seite, Suche und Hinweis
+kamen aus dem Zwischenspeicher. Ändert sich `sw.js`, die Konstante
+`VERSION` darin hochzählen, dann räumt der Service Worker die alten Caches
+weg.
 
 ### Datum und Uhrzeit auf dem Telefon
 
@@ -1864,6 +2227,8 @@ Buchungslink hängt an jeder Verbindung.
 public/
 ├── index.html                    Oberfläche
 ├── .htaccess                     Browser-Cache: immer revalidieren
+├── sw.js                         Service Worker: offline mit letztem Stand
+├── manifest.webmanifest          Installierbar als App
 ├── check.php                     Selbsttest für den Webspace
 ├── assets/
 │   ├── css/style.css             Alle Farben als CSS-Variablen
@@ -1873,6 +2238,10 @@ public/
 │       ├── scoring.js            Bewertungsmodelle
 │       ├── render.js             Ergebnisdarstellung
 │       ├── map.js                SVG-Routenkarte inkl. Label-Platzierung
+│       ├── live.js               Live-Verfolgung, Anschlusswache, Benachrichtigungen
+│       ├── board.js              Abfahrtstafel
+│       ├── autocomplete.js       Vorschlagsliste mit Favoriten
+│       ├── favorites.js          Lieblingsorte und Verlauf
 │       └── data/trains.js        Gattungen, Fahrzeugmodelle, Komfortwerte
 └── api/
     ├── index.php                 Router, führt Fahrplan und Preise zusammen
@@ -1887,9 +2256,11 @@ public/
         ├── Fleet.php             Gelernte Baureihen je Zugnummer
         ├── Health.php            Wie es den fremden Diensten zuletzt ging
         ├── Shops.php             Buchungs-Deeplinks je Land
+        ├── CityTrips.php         Stadtfahrten und Zubringer in München
         └── Providers/
-            ├── OebbHafas.php     Fahrplan, Zuggattungen, Ländercodes, Geometrie
-            ├── DbVendo.php       Echtpreise, Auslastung, Bestpreis
+            ├── OebbHafas.php     Fahrplan, Zuggattungen, Ländercodes, Geometrie, Tafel
+            ├── DbVendo.php       Echtpreise, alle Tarife, Auslastung, Ausstattung
+            ├── Mvg.php           Münchner Nahverkehr: Orte, Verbindungen, Abfahrten
             └── CoachSequence.php Baureihe über bahn.expert
 ```
 
@@ -1904,30 +2275,43 @@ Alles per GET auf `api/`:
 | `?action=locations&q=Bern` | Stationssuche |
 | `?action=journeys&from=…&to=…&date=…&time=…` | Verbindungen inklusive Preis (`&scroll=…` blättert; der Kontext trägt seine Richtung selbst — `scroll` aus der Antwort führt zu späteren, `scrollBack` zu früheren Abfahrten) |
 | `?action=livetrains&bbox=süd,west,nord,ost` | Züge, die dort gerade fahren |
-| `?action=traindetails&jid=…` | Zuglauf mit Halten und Verspätung |
+| `?action=traindetails&jid=…` | Zuglauf mit Halten und Verspätung — statt `jid` auch `db=<journeyId>` (Zuglauf bei der DB) oder `mvgFrom`, `mvgTo`, `line`, `dep`, `arr` (Echtzeit eines MVG-Abschnitts) |
 | `?action=bestprices&from=…&to=…&date=…` | Günstigste Zeitfenster am Tag |
-| `?action=nextconnection&from=…&to=…&date=…&time=…` | Nächster Anschluss nach einem knappen Umstieg |
+| `?action=nextconnection&from=…&to=…&date=…&time=…` | Nächster Anschluss nach einem knappen Umstieg oder Ausfall (mit Echtzeit) |
+| `?action=localroute&fromLat=…&fromLon=…&toLat=…&toLon=…&date=…&time=…` | Ersatzweg im MVV über die MVG |
+| `?action=offers&ctx=…&class=…&discounts=…` | Alle DB-Tarife einer Verbindung (`ctx` = `dbRecon` der Verbindung) |
+| `?action=departures&station=…&type=dep\|arr&date=…&time=…` | Abfahrts- bzw. Ankunftstafel; `lat`/`lon` helfen, in München die MVG-Halte zu finden |
 | `?action=fxrate` | EZB-Tageskurse, für den Gegenwert in Franken |
-| `?action=platforms&lat=…&lon=…&from=…&to=…` | Bahnsteige eines Bahnhofs aus OpenStreetMap (`from`/`to` = die beiden Gleise des Umstiegs) |
+| `?action=platforms&lat=…&lon=…&from=…&to=…` | Bahnsteige, Treppen, Rolltreppen und Aufzüge eines Bahnhofs aus OpenStreetMap (`from`/`to` = die beiden Gleise des Umstiegs) |
 | `?action=works` | Bauarbeiten im Netz, mit Abschnitt und Zeitraum |
 | `?action=disruptions` | Aktive Störungsmeldungen der MVG München |
 
 `journeys` versteht zusätzlich `discounts` (kommagetrennt), `products`
 (kommagetrennt, leer = alle), `class` (1/2), `results`, `arrival=1`, `via`
-(EVA-Nummern, kommagetrennt) und `minchange` (Mindestumsteigezeit in Minuten,
-1–60).
+(EVA-Nummern, kommagetrennt), `minchange` (Mindestumsteigezeit in Minuten,
+1–60) und `fromLat`/`fromLon`/`toLat`/`toLon` (damit werden Stadtfahrten in
+München erkannt).
 
 ---
 
 ## Tests
 
 ```bash
-node bin/test_routes.mjs    # Streckenerkennung
-node bin/test_units.mjs     # Gattungen, Beschriftung, Fahrzeuge, Ausfälle
+node bin/test_routes.mjs       # Streckenerkennung
+node bin/test_units.mjs        # Gattungen, Beschriftung, Fahrzeuge, Ausfälle, Benachrichtigungen
+php bin/test_providers.php     # Übersetzung der HAFAS-, DB- und MVG-Antworten
 ```
 
-Beide brauchen nichts ausser Node — kein Paket, kein Netz, keine Datenbank.
-Sie laufen in unter einer Sekunde.
+Alle drei brauchen nichts ausser Node bzw. PHP — kein Paket, kein Netz,
+keine Datenbank. Sie laufen in unter einer Sekunde.
+
+**`test_providers.php` prüft gegen echte, gekürzte Antworten** der Dienste
+(`bin/fixtures/`, aufgezeichnet 2026-09): ob eine MVG-U-Bahn „U5" heißt und
+nicht „U", ob ein Halt ohne Halt als Ausfall ankommt, ob der Super Sparpreis
+nicht als Flexpreis dasteht und die BahnCard-Rabattpreise nicht als eigene
+Tarife. Genau diese Stellen brechen, wenn ein Dienst sein Format ändert — und
+sie brechen nicht laut, sondern als falscher Text. Ändert sich ein Format,
+eine neue Antwort aufzeichnen, kürzen und die Fixture ersetzen.
 
 **Warum genau diese Funktionen:** Sie entscheiden, was in der Trefferliste
 steht, und sie hängen an Daten von fünf fremden Diensten, die ihre Formate
@@ -2136,3 +2520,16 @@ Für den privaten Gebrauch ist das üblich und verbreitet — aber:
   gerechnet und war zu oft falsch; siehe oben.
 - **Der TLS-Trick kann jederzeit brechen.** Ändert Akamai die Erkennung, kommt
   wieder `OPS_BLOCKED` und das Tool fällt auf Schätzpreise zurück.
+- **Benachrichtigungen brauchen eine offene Seite.** Kein Push-Server; ein
+  Telefon mit dunklem Bildschirm friert die Seite irgendwann ein. Auf dem
+  iPhone nur als installierte App.
+- **Stadtfahrten gibt es nur in München.** Echtzeit für MVG-Abschnitte kommt
+  aus der Abfahrtstafel an Ein- und Ausstieg, nicht aus einem Zuglauf — die
+  Halte dazwischen sind um die gemeldete Verspätung verschoben, nicht
+  einzeln gemessen.
+- **Die Umstiegskarte zeigt keinen Laufweg**, nur Bahnsteige, Treppen,
+  Rolltreppen und Aufzüge je Ebene. Exakte Wege wie in der SBB-App gibt es
+  nur mit freigeschaltetem Zugang zur Journey-Maps-API und nur in der
+  Schweiz.
+- **Die MVG-Abfahrten reichen nur ab jetzt** bis einen Tag voraus; für eine
+  Tafel nächste Woche gibt es in München nur HAFAS, also keine U-Bahn.
