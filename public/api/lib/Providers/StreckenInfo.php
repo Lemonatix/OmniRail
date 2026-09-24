@@ -358,10 +358,15 @@ final class StreckenInfo
             ?? ($res['json']['message'] ?? null)
             ?? $res['body']);
 
+        // "Zu alt" und "existiert noch nicht" kommen als HTTP 400, sind aber
+        // die erwartete Antwort auf eine Probe - der Dienst läuft. Für die
+        // Statistik in check.php also kein Fehlschlag, siehe Health::retract().
         if (mb_stripos($text, 'zu alt') !== false) {
+            Health::retract(self::ENDPOINT);
             return self::REV_TOO_OLD;
         }
         if (mb_stripos($text, 'existiert noch nicht') !== false) {
+            Health::retract(self::ENDPOINT);
             return self::REV_TOO_NEW;
         }
         return self::REV_ERROR;

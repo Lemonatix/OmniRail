@@ -94,6 +94,7 @@ final class CoachSequence
             return null;
         }
         $res = $this->http->getJson($url, $this->headers());
+        self::forgiveNotFound($res, $url);
         $seq = ($res['ok'] && is_array($res['json'])) ? self::mapSequence($res['json']) : null;
         $this->cache->set($key, $seq ?? '');
         return $seq;
@@ -192,6 +193,19 @@ final class CoachSequence
         arsort($zaehler);
         $s = (string) array_key_first($zaehler);
         return ['series' => $s, 'seriesName' => self::SERIES_NAMES[$s]];
+    }
+
+    /**
+     * "Für diesen Zug gibt es gerade keine Wagenreihung" kommt als HTTP 404
+     * - die normale Antwort für Regionalzüge, Züge von morgen und Züge, die
+     * noch nicht bereitgestellt sind. Für die Statistik in check.php ist das
+     * kein Ausfall der DB, siehe Health::retract().
+     */
+    private static function forgiveNotFound(array $res, string $url): void
+    {
+        if (($res['status'] ?? 0) === 404 && $url !== '') {
+            Health::retract($url);
+        }
     }
 
     /** @return array<string,string> */
@@ -299,6 +313,7 @@ final class CoachSequence
         $antworten = $this->http->getJsonAll($urls, $this->headers());
 
         foreach ($antworten as $key => $res) {
+            self::forgiveNotFound($res, $urls[$key] ?? '');
             $info = $this->parse($res, $offen[$key]['cat'] ?? '');
             // Auch Misserfolge merken, sonst fragen wir bei jedem Aufruf erneut.
             $this->cache->set($key, $info ?? '');

@@ -41,6 +41,9 @@ final class Health
         'www.mvg.de'        => 'mvg',
         'strecken-info.de'  => 'streckeninfo',
         'www.strecken-info.de' => 'streckeninfo',
+        // Schweizer Prognosen: der Dienst drosselt (HTTP 429) - das soll
+        // sichtbar sein, bevor jemand fragt, warum die Echtzeit fehlt.
+        'transport.opendata.ch' => 'opendata.ch',
     ];
 
     private static ?string $dir = null;
@@ -74,6 +77,33 @@ final class Health
             $e['err'] = mb_substr($error, 0, 120);
         }
         self::$puffer[$dienst][$eimer] = $e;
+    }
+
+    /**
+     * Den zuletzt verbuchten Fehlschlag eines Dienstes als Erfolg umbuchen.
+     *
+     * Für Antworten, die nach HTTP ein Fehler sind, in der Sache aber genau
+     * das, was gefragt war. strecken.info beantwortet jede Probe bei der
+     * Suche nach dem aktuellen Datenstand mit HTTP 400 ("Revision zu alt",
+     * "existiert noch nicht") - der Dienst funktioniert, die Probe lag nur
+     * daneben. Ohne das Umbuchen meldete check.php "86 % fehlgeschlagen",
+     * während die Baustellen einwandfrei ankamen.
+     */
+    public static function retract(string $url): void
+    {
+        if (self::$dir === null) {
+            return;
+        }
+        $dienst = self::providerOf($url);
+        $eimer = gmdate('Y-m-d\TH');
+        if ($dienst === null || (self::$puffer[$dienst][$eimer]['fail'] ?? 0) < 1) {
+            return;
+        }
+        self::$puffer[$dienst][$eimer]['fail']--;
+        self::$puffer[$dienst][$eimer]['ok']++;
+        if (self::$puffer[$dienst][$eimer]['fail'] === 0) {
+            self::$puffer[$dienst][$eimer]['err'] = '';
+        }
     }
 
     /** Schreibt den Puffer in die Datei — einmal je Anfrage. */
